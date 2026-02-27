@@ -191,6 +191,60 @@ def ring_xy(
     return bcx + radius_px * np.cos(angles), bcy + radius_px * np.sin(angles)
 
 
+def ring_xy_tilted(
+    d_spacing: float,
+    wavelength: float,
+    bcx: float,
+    bcy: float,
+    sdd_mm: float,
+    pixel_size_mm: float,
+    tilt_x_deg: float,
+    tilt_y_deg: float,
+    n_points: int = 360,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Return (x, y) pixel coordinates for a tilted-detector diffraction ring.
+
+    Uses the full Nika tilt model (vectorised) so the displayed ring is an
+    accurate ellipse for large tilts.  Returns NaN entries where the geometry
+    is degenerate; callers should use ``connect='finite'`` in pyqtgraph.
+
+    Returns empty arrays if the d-spacing is unreachable (sin θ ≥ 1).
+    """
+    sin_arg = wavelength / (2.0 * d_spacing)
+    if abs(sin_arg) >= 1.0:
+        return np.array([]), np.array([])
+    theta = float(np.arcsin(sin_arg))
+
+    rho = build_rotation_matrix(tilt_x_deg, tilt_y_deg)
+    angles = np.linspace(0.0, 2.0 * np.pi, n_points, endpoint=False)
+    cos_a = np.cos(angles)
+    sin_a = np.sin(angles)
+
+    # Rotate unit direction vectors; shape (3, n_points)
+    vecs = np.vstack([cos_a, sin_a, np.zeros(n_points)])
+    xyz = rho @ vecs                                           # (3, n)
+    norms = np.linalg.norm(xyz, axis=0)                       # (n,)
+    ok = norms > 1e-10
+    xyz_n = np.where(ok, xyz / np.where(ok, norms, 1.0), 0.0)
+
+    gamma = np.pi - np.arccos(np.clip(xyz_n[2], -1.0, 1.0))
+    two_theta = 2.0 * theta
+    other_angle = np.pi - two_theta - gamma
+
+    sdd_px = sdd_mm / pixel_size_mm
+    with np.errstate(invalid="ignore", divide="ignore"):
+        dist = np.where(
+            np.abs(other_angle) > 1e-10,
+            sdd_px * np.sin(two_theta) / np.sin(other_angle),
+            np.nan,
+        )
+
+    x = bcx + dist * cos_a
+    y = bcy + dist * sin_a
+    return x, y
+
+
 # ---------------------------------------------------------------------------
 # Radial profile extraction
 # ---------------------------------------------------------------------------
@@ -252,21 +306,25 @@ def radial_profile_at_angle(
 
     n_r = max(2, int(round(r_max - r_min)) + 1)
     radii = np.linspace(r_min, r_max, n_r)
-    intensities = np.full(n_r, np.nan)
 
     n_trans = max(3, int(2 * transverse_half_width) + 1)
     dp_arr = np.linspace(-transverse_half_width, transverse_half_width, n_trans)
 
-    for i, r in enumerate(radii):
-        vals: list[float] = []
-        for dp in dp_arr:
-            col = int(round(bcx + r * cos_a + dp * cos_p))
-            row = int(round(bcy + r * sin_a + dp * sin_p))
-            if 0 <= col < nx and 0 <= row < ny and not mask[row, col]:
-                v = float(image[row, col])
-                if np.isfinite(v):
-                    vals.append(v)
-        if vals:
-            intensities[i] = float(np.mean(vals))
+    # Vectorised: compute all (n_r × n_trans) pixel coordinates at once
+    cols = np.round(bcx + radii[:, None] * cos_a + dp_arr[None, :] * cos_p).astype(int)
+    rows = np.round(bcy + radii[:, None] * sin_a + dp_arr[None, :] * sin_p).astype(int)
+
+    in_bounds = (cols >= 0) & (cols < nx) & (rows >= 0) & (rows < ny)
+    safe_cols = np.clip(cols, 0, nx - 1)
+    safe_rows = np.clip(rows, 0, ny - 1)
+
+    img_vals = image[safe_rows, safe_cols].astype(float)
+    is_masked = mask[safe_rows, safe_cols]
+    valid = in_bounds & ~is_masked & np.isfinite(img_vals)
+
+    # Use explicit sum/count to avoid RuntimeWarning from nanmean on all-NaN rows
+    n_valid = valid.sum(axis=1)                            # (n_r,)
+    sum_vals = np.where(valid, img_vals, 0.0).sum(axis=1)  # (n_r,)
+    intensities = np.where(n_valid > 0, sum_vals / np.where(n_valid > 0, n_valid, 1), np.nan)
 
     return radii, intensities, True

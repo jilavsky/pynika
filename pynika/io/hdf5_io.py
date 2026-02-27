@@ -50,13 +50,19 @@ def load_image_and_params(hdf5_path: str) -> dict[str, Any]:
         "hdf5_path"  : str
     """
     with h5py.File(hdf5_path, "r") as f:
-        # 2-D image — squeeze away any singleton dimensions
+        # 2-D image — squeeze away any singleton dimensions.
+        # The HDF5 file stores the image in Nika/Igor Pro convention:
+        #   image[x_index, y_index]  where x is the SHORT (horizontal) dimension
+        #   and y is the LONG (vertical) dimension — opposite to numpy (row, col).
+        # Transpose immediately so the rest of the code uses the standard numpy
+        # convention:  image[row, col] = image[y_index, x_index].
         raw = np.array(f["/entry/data/data"], dtype=np.float64)
         image = np.squeeze(raw)
         if image.ndim != 2:
             raise ValueError(
                 f"Expected 2-D image in /entry/data/data, got shape {raw.shape}"
             )
+        image = image.T   # (nx_short, ny_long) → (ny_long, nx_short)
 
         # Instrument subtree
         det = f["/entry/instrument/detector"]
@@ -122,22 +128,31 @@ def make_mask(image: np.ndarray, instrument: str) -> np.ndarray:
     """
     Build the bad-pixel mask for the given instrument.
 
+    *image* is assumed to already be in numpy convention (ny, nx) after the
+    load-time transpose applied in load_image_and_params.
+
     Returns a boolean array, same shape as *image*, where True = excluded.
 
-    SAXS (Eiger):  mask negative pixels + dead columns 0-3 and 242-244
-    WAXS (Pilatus): mask pixels > 1e7  + dead columns 511-515, 1026-1040, 1551-1555
+    SAXS (Eiger):
+        mask negative pixels + dead bands at y-rows 0-3 and 242-244
+        (in the original Nika/Igor image these were axis-1 columns 0-3 and
+        242-244; after the (nx,ny)→(ny,nx) transpose they become axis-0 rows).
+
+    WAXS (Pilatus):
+        mask pixels > 1e7 + module-gap rows 511-515, 1026-1040, 1551-1555
+        (same axis convention after transpose).
     """
     mask = np.zeros(image.shape, dtype=bool)
 
     if instrument == "SAXS":
         mask[image < 0] = True
-        mask[:, :4] = True
-        mask[:, 242:245] = True
+        mask[:4, :]      = True   # dead band y=0–3   (was mask[:, :4] on raw image)
+        mask[242:245, :] = True   # dead band y=242–244 (was mask[:, 242:245] on raw)
     elif instrument == "WAXS":
-        mask[image > 1e7] = True
-        mask[:, 511:516]  = True
-        mask[:, 1026:1041] = True
-        mask[:, 1551:1556] = True
+        mask[image > 1e7]  = True
+        mask[511:516, :]   = True   # module gap (was mask[:, 511:516] on raw)
+        mask[1026:1041, :] = True   # module gap (was mask[:, 1026:1041] on raw)
+        mask[1551:1556, :] = True   # module gap (was mask[:, 1551:1556] on raw)
     # "unknown" or "Custom": no masking by default
 
     n_masked = int(np.sum(mask))

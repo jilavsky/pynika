@@ -160,41 +160,42 @@ pyNika FAILED: SAXS calibration 2025-03-01 14:23:05
 
 ---
 
-## Phase 6 — Qt6 Graphical User Interface
+## Phase 6 — Qt6 Graphical User Interface  ✅ (done)
 
 **Goal:** Implement the full interactive GUI described in requirements §9.
 
 ### Sub-tasks
 
-| # | Feature | Notes |
-|---|---------|-------|
-| 6.1 | Application skeleton: `QMainWindow` with two-pane `QSplitter` | |
-| 6.2 | Left panel scaffolding with `QScrollArea` | |
-| 6.3 | **Data selector:** `QPushButton` + `QFileDialog` + path label | Filter `.hdf .h5 .hdf5`; shorten displayed path |
-| 6.4 | **Log intensity checkbox** | Toggles `np.log10` pre-processing before display |
-| 6.5 | **pyqtgraph `ImageView`** for 2D detector image | Auto-scale, colourmap, zoom/pan |
-| 6.6 | **Calibrant selector** (combo/radio) | Populates d-spacing table |
-| 6.7 | **d-spacing table** (`QTableWidget`) | Columns: use □, d (Å), ±W (px), display □ |
-| 6.8 | Instrument parameters display (wavelength, pixel size) | Editable override |
-| 6.9 | **Fit parameters table** | SDD, BCx, BCy, TiltX, TiltY — each: value field, Fit □, Low/High bounds |
-| 6.10 | **No limits checkbox** — hides bound columns | |
-| 6.11 | **Beam-center overlay** on image (red dot + circle) | `pyqtgraph.ScatterPlotItem` + `EllipseROI` |
-| 6.12 | **Ring overlays** (red = theory, yellow = ±search band) | Update on every parameter change |
-| 6.13 | **Run Fit button** — runs optimisation in a `QThread` worker | Progress dialog; results update parameter fields |
-| 6.14 | χ² and status labels | |
-| 6.15 | **Save to File** button | |
-| 6.16 | **Save to PVs** button | |
-| 6.17 | **Export JSON / Import JSON** buttons | Import shows overwrite-confirmation dialog |
-| 6.18 | **Custom device configuration dialog** | Modal `QDialog`; HDF5 paths, EPICS PVs, mask rules |
-| 6.19 | `launch_gui()` entry point + CLI `--gui` flag | |
+| # | Feature | Status | Notes |
+|---|---------|--------|-------|
+| 6.1 | Application skeleton: `QMainWindow` with two-pane `QSplitter` | ✅ | |
+| 6.2 | Left panel scaffolding with `QScrollArea` | ✅ | min 400 px, max 600 px |
+| 6.3 | **Data selector:** `QPushButton` + `QFileDialog` + path label | ✅ | Last 3 path components shown |
+| 6.4 | **Log intensity checkbox** | ✅ | Default ON; view retained on toggle |
+| 6.5 | **pyqtgraph `ImageView`** for 2D detector image | ✅ | viridis cmap; aspect locked 1:1 |
+| 6.6 | **Calibrant selector** (combo/radio) | ✅ | Auto-selects SAXS→AgBehenate, WAXS→LaB6 |
+| 6.7 | **d-spacing table** (`QTableWidget`) | ✅ | 3 cols: Use ☐, d (Å), ±W (px) — Use also controls overlay display |
+| 6.8 | Instrument parameters display (wavelength, pixel size) | ✅ | Editable QLineEdit fields |
+| 6.9 | **Fit parameters table** | ✅ | SDD, BCx, BCy, TiltX, TiltY |
+| 6.10 | **No limits checkbox** — hides bound columns | ✅ | |
+| 6.11 | **Beam-center overlay** | ✅ | Red "+" `ScatterPlotItem` |
+| 6.12 | **Ring overlays** (red = theory, yellow dashed = ±search band) | ✅ | Redrawn on every param change |
+| 6.13 | **Run Fit button** — background `QThread` worker | ✅ | Progress bar per ring; Revert button |
+| 6.14 | χ²/dof and status labels | ✅ | |
+| 6.15 | **Save to File** button | ✅ | `save_params_to_hdf5`; confirm dialog |
+| 6.16 | **Save to PVs** button | ✅ | Report msg: "pyNika OK using <file> at <ts>" |
+| 6.17 | **Export JSON / Import JSON** buttons | ✅ | Default name: `{saxs\|waxs\|custom}_pynika_parameters.json`; warns on λ mismatch |
+| 6.18 | **Custom device configuration dialog** | ✅ | Modal QDialog 720 px; EPICS PV name fields; reset-to-defaults |
+| 6.19 | `launch_gui()` entry point + CLI `--gui` flag | ✅ | `pynika-gui` console script |
 
-### GUI Architecture Notes
+### GUI Architecture Notes (as implemented)
 
-- Use `QThread` + `QObject` worker pattern (not `threading`) to keep the GUI responsive during fitting.
-- Emit a `progress(int)` signal from the worker for a `QProgressDialog`.
-- Use `pyqtgraph.PlotDataItem` for ring overlays (not matplotlib) to stay consistent with the project's Qt-only display stack.
-- The image display should handle aspect-ratio correction: if `image.shape[1] > image.shape[0]` (wider than tall), orient normally; otherwise rotate 90° so the long axis is horizontal.
-- Beam-center dot/circle may be outside the displayed image region — that is expected behaviour and does not require special handling.
+- All Qt imports are **deferred inside `launch_gui()`** — both `FitWorker` and `MainWindow` are defined there as closures so they capture the lazily imported Qt classes.
+- `_d_rows: list[tuple[QCheckBox, QDoubleSpinBox]]` — single "Use" checkbox controls both fitting and ring overlay display.
+- `_update_image_display(reset_view=False)` — `autoRange` called only when `reset_view=True` (i.e., on file load), preserving zoom when the log checkbox is toggled.
+- Residual in `optimise_geometry` uses **absolute pixel coordinates** (2 residuals Δx, Δy per peak) — required to avoid divergence when BCx/BCy are free parameters simultaneously.
+- Azimuthal step (°) and strip half-width (px) are both user-exposed spinboxes in the Optimisation group.
+- `_custom_pv_map` stored on the `MainWindow` instance; overrides built-in instrument EPICS config.
 
 ---
 

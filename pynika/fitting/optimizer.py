@@ -115,10 +115,12 @@ def fit_gaussian_linear(
     yv = y[valid]
 
     # Initial guesses
+    # Use the centre of the x-range as mu0 (= theoretical ring radius) rather
+    # than the position of the maximum, to avoid locking onto noise spikes.
     idx_max = int(np.argmax(yv))
     y_low = float(np.percentile(yv, 20))
     A0 = float(yv[idx_max]) - y_low
-    mu0 = float(xv[idx_max])
+    mu0 = float((xv[0] + xv[-1]) / 2.0)
     sigma0 = max(1.0, (float(xv[-1]) - float(xv[0])) / 4.0)
     span = float(xv[-1]) - float(xv[0])
     m0 = (float(yv[-1]) - float(yv[0])) / span if span > 0 else 0.0
@@ -257,6 +259,7 @@ def optimise_geometry(
     tilt_x_init: float,
     tilt_y_init: float,
     config: Optional[FitConfig] = None,
+    progress_fn=None,
 ) -> OptimisationResult:
     """
     Run the full least-squares geometry optimisation.
@@ -274,7 +277,7 @@ def optimise_geometry(
     -------
     OptimisationResult
     """
-    from pynika.geometry import expected_ring_radius
+    from pynika.geometry import build_rotation_matrix
 
     if config is None:
         config = FitConfig()
@@ -282,10 +285,13 @@ def optimise_geometry(
     # ------------------------------------------------------------------
     # Step 1: collect Gaussian peak positions at initial parameter values
     # ------------------------------------------------------------------
+    enabled_indices = [i for i, f in enumerate(calibrant.use_flags) if f]
+    n_rings = len(enabled_indices)
     all_peaks: list[PeakFit] = []
-    for i, d_spacing in enumerate(calibrant.d_spacings):
-        if not calibrant.use_flags[i]:
-            continue
+    for ring_count, i in enumerate(enabled_indices):
+        d_spacing = calibrant.d_spacings[i]
+        if progress_fn is not None:
+            progress_fn(ring_count, n_rings)
         search_width = calibrant.search_widths[i]
         ring_peaks = find_ring_peaks(
             image, mask, bcx_init, bcy_init,
@@ -375,35 +381,78 @@ def optimise_geometry(
 
     # ------------------------------------------------------------------
     # Step 3: residual function
+    #
+    # Bug-fix rationale: the old code compared
+    #   r_fit   = radial distance from the INITIAL beam centre to the peak
+    #   r_model = expected radius from the CURRENT beam centre
+    # These two quantities use different origins, so varying BCx/BCy in the
+    # optimiser produced inconsistent residuals → divergence.
+    #
+    # Correct approach: convert every fitted peak to absolute pixel (x, y)
+    # coordinates once using the initial beam centre, then compare against
+    # the model-predicted pixel position (expected_pixel_position).  Two
+    # residuals per peak (Δx, Δy) are returned so the optimiser gets a
+    # proper gradient in both directions.  The residual loop is fully
+    # vectorised via numpy.
     # ------------------------------------------------------------------
-    peak_angles = np.array([np.deg2rad(p.angle_deg) for p in all_peaks])
-    peak_radii  = np.array([p.radius_px             for p in all_peaks])
+    peak_angles     = np.array([np.deg2rad(p.angle_deg) for p in all_peaks])
+    peak_radii      = np.array([p.radius_px             for p in all_peaks])
+    peak_thetas_arr = np.array(peak_thetas)
+
+    # Absolute pixel coords of each fitted peak (fixed, using initial BC)
+    peak_x_abs = bcx_init + peak_radii * np.cos(peak_angles)
+    peak_y_abs = bcy_init + peak_radii * np.sin(peak_angles)
+
+    cos_phi = np.cos(peak_angles)   # (N,)  — precomputed, constant
+    sin_phi = np.sin(peak_angles)   # (N,)
 
     def residuals(p: np.ndarray) -> np.ndarray:
         v = decode(p)
-        res = np.empty(len(all_peaks))
-        for k, (theta, phi, r_fit) in enumerate(
-            zip(peak_thetas, peak_angles, peak_radii)
-        ):
-            r_model = expected_ring_radius(
-                theta, float(phi),
-                v["bcx"], v["bcy"], v["sdd"], pixel_size_mm,
-                v["tilt_x"], v["tilt_y"],
+        # Build rotation matrix for current tilt parameters
+        rho = build_rotation_matrix(v["tilt_x"], v["tilt_y"])
+
+        # Rotate unit direction vectors for all peaks at once: (3, N)
+        vecs = np.vstack([cos_phi, sin_phi, np.zeros(len(peak_angles))])
+        xyz  = rho @ vecs
+        norms = np.linalg.norm(xyz, axis=0)
+        ok    = norms > 1e-10
+        xyz_n = np.where(ok, xyz / np.where(ok, norms, 1.0), 0.0)
+
+        gamma       = np.pi - np.arccos(np.clip(xyz_n[2], -1.0, 1.0))
+        two_theta   = 2.0 * peak_thetas_arr
+        other_angle = np.pi - two_theta - gamma
+
+        sdd_px = v["sdd"] / pixel_size_mm
+        with np.errstate(invalid="ignore", divide="ignore"):
+            dist = np.where(
+                np.abs(other_angle) > 1e-10,
+                sdd_px * np.sin(two_theta) / np.sin(other_angle),
+                np.nan,
             )
-            res[k] = r_fit - r_model if np.isfinite(r_model) else 1000.0
-        return res
+
+        # Model-predicted absolute pixel positions
+        xm = v["bcx"] + dist * cos_phi   # (N,)
+        ym = v["bcy"] + dist * sin_phi   # (N,)
+
+        valid = np.isfinite(xm) & np.isfinite(ym)
+        res_x = np.where(valid, peak_x_abs - xm, 1000.0)
+        res_y = np.where(valid, peak_y_abs - ym, 1000.0)
+
+        # Interleave x,y residuals: [Δx₀, Δy₀, Δx₁, Δy₁, …]
+        return np.ravel(np.column_stack([res_x, res_y]))
 
     # ------------------------------------------------------------------
     # Step 4: run optimisation
     # ------------------------------------------------------------------
-    log.info("Starting least_squares with %d free params, %d residuals",
-             len(param_names), len(all_peaks))
+    n_residuals = len(all_peaks) * 2   # x and y per peak
+    log.info("Starting least_squares with %d free params, %d residuals (%d peaks)",
+             len(param_names), n_residuals, len(all_peaks))
     try:
         result = least_squares(
             residuals, p0,
             bounds=(lb, ub),
             method="trf",
-            ftol=1e-8, xtol=1e-8, gtol=1e-8,
+            ftol=1e-4, xtol=1e-4, gtol=1e-4,
             max_nfev=2000 * len(param_names),
         )
     except Exception as exc:
@@ -416,12 +465,12 @@ def optimise_geometry(
         )
 
     v_final = decode(result.x)
-    n_dof = max(1, len(all_peaks) - len(param_names))
+    n_dof = max(1, len(all_peaks) * 2 - len(param_names))
     chi2 = float(np.sum(result.fun**2)) / n_dof
     success = bool(result.success) and chi2 < 1000.0
 
     log.info(
-        "Optimisation %s: chi2/dof=%.4g, %d peaks, cost=%.4g, msg=%s",
+        "Optimisation %s: chi2/dof=%.4g px², %d peaks, cost=%.4g, msg=%s",
         "OK" if success else "FAILED",
         chi2, len(all_peaks), float(result.cost), result.message,
     )

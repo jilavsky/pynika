@@ -101,21 +101,14 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_gui() -> None:
     """Launch the Qt6 GUI (entry point shared by --gui flag and pynika-gui script)."""
-    print(
-        "pyNika GUI is not yet implemented.\n"
-        "The GUI is planned for Phase 6 of development — see doc/implementation_plan.md.\n"
-        "Current CLI usage:\n"
-        "  pynika --file DATA.hdf --instrument SAXS\n"
-        "  pynika --file DATA.hdf --instrument WAXS --save-to-pvs\n"
-        "  pynika --file DATA.hdf --instrument Custom --config my.json",
-        file=sys.stderr,
-    )
-    sys.exit(1)
+    from pynika.gui.main_window import launch_gui
+    launch_gui()
 
 
 def main_gui(argv: list[str] | None = None) -> None:
     """Entry point for the pynika-gui console script."""
-    _run_gui()
+    from pynika.gui.main_window import launch_gui
+    launch_gui()
 
 
 if __name__ == "__main__":
