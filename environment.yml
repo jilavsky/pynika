@@ -1,0 +1,39 @@
+name: pynika
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  # Python
+  - python=3.11
+
+  # Core scientific stack (prefer conda for compiled packages)
+  - numpy>=1.24
+  - scipy>=1.10
+  - h5py>=3.8
+
+  # GUI (Qt6 + pyqtgraph)
+  - pyqt>=6.4          # conda-forge provides PyQt6 as 'pyqt'
+  - pyqtgraph>=0.13
+
+  # pip-only packages (no conda build available or conda version is outdated)
+  - pip
+  - pip:
+      # The pynika package itself (editable install for development)
+      - "-e .[epics,dev]"
+      # EPICS support — only available on beamline machines; install anyway,
+      # pynika handles ImportError gracefully
+      - pyepics>=3.5
+      # Testing and linting
+      - pytest>=7.0
+      - pytest-cov
+      - ruff
+      - mypy
+
+# To create the environment:
+#   conda env create -f environment.yml
+#
+# To activate:
+#   conda activate pynika
+#
+# To update after changes to this file:
+#   conda env update -f environment.yml --prune

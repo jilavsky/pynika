@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Conda
+.conda/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Data files (large — keep examples small)
+*.hdf
+*.hdf5
+*.h5
+# Allow the example data files in examples/
+!examples/*.hdf
+!examples/*.hdf5
+!examples/*.h5
+
+# Logs
+*.log
+
+# Secrets / environment
+.env
+*.pem
+
+# Distribution / packaging
+MANIFEST
