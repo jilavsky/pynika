@@ -14,6 +14,12 @@ import h5py
 
 log = logging.getLogger(__name__)
 
+
+def _scalar(v) -> float:
+    """Extract a Python float from an HDF5 value that may be shape () or (1,)."""
+    return float(np.asarray(v).flat[0])
+
+
 _METADATA_KEYS = [
     "pin_ccd_center_x_pixel", "pin_ccd_center_y_pixel",
     "pin_ccd_tilt_x", "pin_ccd_tilt_y",
@@ -54,12 +60,12 @@ def load_image_and_params(hdf5_path: str) -> dict[str, Any]:
 
         # Instrument subtree
         det = f["/entry/instrument/detector"]
-        sdd        = float(det["distance"][()])
-        pixel_size = float(det["x_pixel_size"][()])
-        bcx_inst   = float(det["beam_center_x"][()])
-        bcy_inst   = float(det["beam_center_y"][()])
+        sdd        = _scalar(det["distance"][()])
+        pixel_size = _scalar(det["x_pixel_size"][()])
+        bcx_inst   = _scalar(det["beam_center_x"][()])
+        bcy_inst   = _scalar(det["beam_center_y"][()])
 
-        wavelength = float(f["/entry/instrument/monochromator"]["wavelength"][()])
+        wavelength = _scalar(f["/entry/instrument/monochromator"]["wavelength"][()])
 
         # Metadata scalars (PV snapshots recorded at acquisition time)
         meta_grp = f["/entry/Metadata"]
@@ -67,7 +73,10 @@ def load_image_and_params(hdf5_path: str) -> dict[str, Any]:
         for key in _METADATA_KEYS:
             if key in meta_grp:
                 val = meta_grp[key][()]
-                metadata[key] = float(val) if np.ndim(val) == 0 else val
+                try:
+                    metadata[key] = _scalar(val)
+                except (ValueError, TypeError):
+                    metadata[key] = val  # keep strings and other non-numeric types
 
     # Auto-detect SAXS vs WAXS from metadata keys
     if "pin_ccd_tilt_x" in metadata:
