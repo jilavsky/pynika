@@ -49,11 +49,12 @@ all = [
 
 [project.scripts]
 pynika = "pynika.cli:main"
+pynika-gui = "pynika.cli:main_gui"
 
 [project.urls]
-Homepage = "https://github.com/ilavsky/pynika"
-Documentation = "https://github.com/ilavsky/pynika/tree/main/doc"
-"Bug Tracker" = "https://github.com/ilavsky/pynika/issues"
+Homepage = "https://github.com/jilavsky/pynika"
+Documentation = "https://github.com/jilavsky/pynika/tree/main/doc"
+"Bug Tracker" = "https://github.com/jilavsky/pynika/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
