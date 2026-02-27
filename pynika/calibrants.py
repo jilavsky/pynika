@@ -52,7 +52,9 @@ AG_BEHENATE = Calibrant(
          5.838,   # 10th
     ],
     use_flags=[True] * 10,
-    search_widths=[50, 30, 20, 20, 20, 20, 20, 20, 20, 20],
+    # Search widths (±pixels around theoretical radius) — default 15 px for all
+    # rings; users can widen for noisy data or narrow for well-resolved peaks.
+    search_widths=[15, 15, 15, 15, 15, 15, 15, 15, 15, 15],
 )
 
 # ---------------------------------------------------------------------------
