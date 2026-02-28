@@ -29,8 +29,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--instrument", "-i",
         choices=["SAXS", "WAXS", "Custom"],
-        default="SAXS",
-        help="Instrument configuration to use (default: SAXS).",
+        default=None,
+        help=(
+            "Instrument configuration to use: SAXS, WAXS, or Custom. "
+            "When omitted the instrument is auto-detected from the HDF5 file metadata "
+            "(falls back to SAXS if detection fails)."
+        ),
     )
     p.add_argument(
         "--config", "-c",
@@ -87,8 +91,22 @@ def main(argv: list[str] | None = None) -> int:
 
     from pynika import Calibrator
 
+    # Auto-detect instrument from the HDF5 file when --instrument is not given
+    instrument = args.instrument
+    if instrument is None and args.config is None:
+        try:
+            from pynika.io.hdf5_io import load_image_and_params
+            _meta = load_image_and_params(args.file)
+            instrument = _meta.get("instrument", "SAXS")
+            logging.info("Auto-detected instrument: %s", instrument)
+        except Exception as _exc:
+            instrument = "SAXS"
+            logging.warning("Instrument auto-detection failed (%s) — defaulting to SAXS", _exc)
+    elif instrument is None:
+        instrument = "SAXS"  # Custom requires explicit --instrument Custom
+
     try:
-        cal = Calibrator(instrument=args.instrument, config_file=args.config)
+        cal = Calibrator(instrument=instrument, config_file=args.config)
         if args.auto_fit:
             result = cal.auto_calibrate(args.file)
         else:
