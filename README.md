@@ -103,6 +103,9 @@ The GUI opens a two-pane window:
 # Calibrate a SAXS file, save results to HDF5
 pynika --file /data/SAXS.hdf
 
+# Use automatic multi-stage fitting (recommended starting point)
+pynika --file /data/SAXS.hdf --auto-fit
+
 # Calibrate and also push to EPICS PVs
 pynika --file /data/SAXS.hdf --save-to-pvs
 
@@ -126,6 +129,7 @@ pynika --help
 | `--file FILE` | — | Path to HDF5 data file (required in non-GUI mode) |
 | `--instrument` | `SAXS` | `SAXS`, `WAXS`, or `Custom` |
 | `--config FILE` | — | JSON config file (required for `Custom`) |
+| `--auto-fit` | off | Multi-stage automatic fit (recommended): Stage 1 fits SDD+BCx+BCy with first 2 rings; Stages 2–3 fit all parameters with all rings; chi²<1 = success |
 | `--save-to-pvs` | off | Push results to EPICS PVs |
 | `--gui` | off | Launch the Qt6 GUI |
 | `--verbose` / `-v` | off | Enable DEBUG logging |
@@ -135,7 +139,14 @@ pynika --help
 ```python
 from pynika import Calibrator, CalibrationResult
 
-# ── Basic calibration ──────────────────────────────────────────
+# ── Automatic multi-stage calibration (recommended) ────────────
+cal = Calibrator(instrument="SAXS")
+result = cal.auto_calibrate("/data/SAXS.hdf")
+# Stage 1: first 2 d-spacings, SDD+BCx+BCy only (abort if chi²≥5)
+# Stage 2: all d-spacings, all parameters      (done if chi²<0.2)
+# Stage 3: refinement pass                     (success if chi²<1)
+
+# ── Basic single-pass calibration ─────────────────────────────
 cal = Calibrator(instrument="SAXS")          # or "WAXS"
 result = cal.calibrate("/data/SAXS.hdf")     # runs the full optimisation
 

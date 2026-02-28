@@ -38,6 +38,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to a JSON configuration file (required for Custom instrument).",
     )
     p.add_argument(
+        "--auto-fit",
+        action="store_true",
+        default=False,
+        help=(
+            "Use the automatic multi-stage fitting procedure: "
+            "Stage 1 fits SDD+BCx+BCy with the first 2 d-spacings; "
+            "Stage 2–3 fits all parameters with all d-spacings. "
+            "chi²/dof < 1 = success."
+        ),
+    )
+    p.add_argument(
         "--save-to-pvs",
         action="store_true",
         default=False,
@@ -78,7 +89,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         cal = Calibrator(instrument=args.instrument, config_file=args.config)
-        result = cal.calibrate(args.file)
+        if args.auto_fit:
+            result = cal.auto_calibrate(args.file)
+        else:
+            result = cal.calibrate(args.file)
     except Exception as exc:
         logging.error("Calibration failed: %s", exc)
         # Still attempt to write a failure report to PVs

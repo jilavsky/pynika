@@ -131,6 +131,94 @@ def launch_gui() -> None:
             self.finished.emit(result)
 
     # -----------------------------------------------------------------------
+    # AutoFitWorker — runs the multi-stage Auto Fit on a background thread
+    # -----------------------------------------------------------------------
+
+    class AutoFitWorker(QObject):
+        """Runs the 3-stage auto-fit procedure on a background QThread."""
+        stage_update = pyqtSignal(str, int)   # (message, stage 1/2/3)
+        finished     = pyqtSignal(object, str) # (OptimisationResult, final_message)
+
+        def __init__(
+            self, image, mask, calibrant, wavelength, pixel_size,
+            sdd, bcx, bcy, tilt_x, tilt_y, config,
+        ) -> None:
+            super().__init__()
+            self._image = image;  self._mask = mask
+            self._calibrant = calibrant
+            self._wavelength = wavelength;  self._pixel_size = pixel_size
+            self._sdd = sdd;  self._bcx = bcx;  self._bcy = bcy
+            self._tilt_x = tilt_x;  self._tilt_y = tilt_y
+            self._config = config
+
+        def run(self) -> None:
+            import copy
+            import math
+            from pynika.fitting.optimizer import optimise_geometry, FitConfig
+
+            # Stage 1: first 2 enabled d-spacings, SDD+BCx+BCy only
+            cal_1 = copy.deepcopy(self._calibrant)
+            enabled = [i for i, f in enumerate(cal_1.use_flags) if f]
+            for i in range(len(cal_1.use_flags)):
+                cal_1.use_flags[i] = i in enabled[:2]
+
+            cfg_1 = FitConfig()
+            cfg_1.step_deg           = self._config.step_deg
+            cfg_1.transverse_px      = self._config.transverse_px
+            cfg_1.fit_sdd            = True
+            cfg_1.fit_bcx            = True
+            cfg_1.fit_bcy            = True
+            cfg_1.fit_tilt_x         = False
+            cfg_1.fit_tilt_y         = False
+            cfg_1.sdd_limits         = self._config.sdd_limits
+            cfg_1.bcx_limits         = self._config.bcx_limits
+            cfg_1.bcy_limits         = self._config.bcy_limits
+            cfg_1.min_peaks_per_ring = self._config.min_peaks_per_ring
+
+            self.stage_update.emit("Stage 1/3: first 2 rings — SDD, BCx, BCy…", 1)
+            r1 = optimise_geometry(
+                self._image, self._mask, cal_1,
+                self._wavelength, self._pixel_size,
+                self._sdd, self._bcx, self._bcy,
+                self._tilt_x, self._tilt_y,
+                config=cfg_1,
+            )
+            chi1 = r1.chi_square if math.isfinite(r1.chi_square) else 1e9
+            if r1.n_peaks_used == 0 or chi1 >= 5.0:
+                self.finished.emit(
+                    r1,
+                    f"Aborted at Stage 1 — chi²/dof={chi1:.3g} (need <5) or no peaks",
+                )
+                return
+
+            # Stage 2: all enabled peaks, all free parameters
+            self.stage_update.emit("Stage 2/3: all rings — all parameters…", 2)
+            r2 = optimise_geometry(
+                self._image, self._mask, self._calibrant,
+                self._wavelength, self._pixel_size,
+                r1.sdd, r1.bcx, r1.bcy,
+                r1.tilt_x, r1.tilt_y,
+                config=self._config,
+            )
+            chi2 = r2.chi_square if math.isfinite(r2.chi_square) else 1e9
+            if chi2 < 0.2:
+                self.finished.emit(r2, f"Converged at Stage 2 — chi²/dof={chi2:.4f}")
+                return
+
+            # Stage 3: refinement pass
+            self.stage_update.emit("Stage 3/3: refinement pass…", 3)
+            r3 = optimise_geometry(
+                self._image, self._mask, self._calibrant,
+                self._wavelength, self._pixel_size,
+                r2.sdd, r2.bcx, r2.bcy,
+                r2.tilt_x, r2.tilt_y,
+                config=self._config,
+            )
+            chi3 = r3.chi_square if math.isfinite(r3.chi_square) else 1e9
+            status_tag = "OK" if chi3 < 1.0 else "FAILED (chi²≥1)"
+            self.finished.emit(r3, f"Stage 3 complete — chi²/dof={chi3:.4f} [{status_tag}]")
+
+    # -----------------------------------------------------------------------
     # MainWindow class (defined inside launch_gui to avoid top-level Qt imports)
     # -----------------------------------------------------------------------
 
@@ -275,7 +363,7 @@ def launch_gui() -> None:
             self._width_all_spin = QDoubleSpinBox()
             self._width_all_spin.setRange(1, 500)
             self._width_all_spin.setValue(15.0)
-            self._width_all_spin.setSingleStep(1.0)
+            self._width_all_spin.setSingleStep(5.0)
             self._width_all_spin.setDecimals(0)
             row.addWidget(self._width_all_spin)
             apply_btn = QPushButton("Apply")
@@ -924,7 +1012,7 @@ def launch_gui() -> None:
                 w_spin = QDoubleSpinBox()
                 w_spin.setRange(1, 500)
                 w_spin.setValue(w)
-                w_spin.setSingleStep(1.0)
+                w_spin.setSingleStep(5.0)
                 w_spin.setDecimals(0)
                 w_spin.valueChanged.connect(self._update_overlays)
                 self._d_table.setCellWidget(i, 2, w_spin)
@@ -1076,8 +1164,17 @@ def launch_gui() -> None:
             row_controls.addStretch()
             v.addLayout(row_controls)
 
-            # Row 2 — Run / Revert buttons
+            # Row 2 — Auto Fit / Run Fit / Revert buttons
             btn_row = QHBoxLayout()
+            self._auto_fit_btn = QPushButton("Auto Fit")
+            self._auto_fit_btn.setToolTip(
+                "Multi-stage automatic fit:\n"
+                "Stage 1 — first 2 rings, SDD+BCx+BCy only (abort if chi²≥5)\n"
+                "Stage 2 — all rings, all parameters (done if chi²<0.2)\n"
+                "Stage 3 — refinement pass (chi²<1 = success)"
+            )
+            self._auto_fit_btn.clicked.connect(self._on_auto_fit)
+            btn_row.addWidget(self._auto_fit_btn)
             self._run_btn = QPushButton("Run Fit")
             self._run_btn.clicked.connect(self._on_run_fit)
             btn_row.addWidget(self._run_btn)
@@ -1179,6 +1276,7 @@ def launch_gui() -> None:
             self._fit_status_label.setText("Scanning rings…")
             self._chi2_label.setText("χ²/dof: —")
             self._run_btn.setEnabled(False)
+            self._auto_fit_btn.setEnabled(False)
 
             self._fit_worker = FitWorker(
                 self._image, mask, cal, wl, pix,
@@ -1192,7 +1290,9 @@ def launch_gui() -> None:
             self._fit_worker.progress.connect(self._on_fit_progress)
             self._fit_worker.finished.connect(self._on_fit_finished)
             self._fit_worker.finished.connect(self._fit_thread.quit)
-            self._fit_thread.finished.connect(lambda: self._run_btn.setEnabled(True))
+            self._fit_thread.finished.connect(
+                lambda: (self._run_btn.setEnabled(True), self._auto_fit_btn.setEnabled(True))
+            )
 
             self._fit_thread.start()
 
@@ -1207,6 +1307,103 @@ def launch_gui() -> None:
                 spin.blockSignals(False)
             self._update_overlays()
             self.statusBar().showMessage("Reverted to pre-fit parameters.")
+
+        def _on_auto_fit(self) -> None:
+            """Launch the multi-stage Auto Fit procedure in a background thread."""
+            if self._image is None:
+                self.statusBar().showMessage("Load a file first.")
+                return
+            if self._calibrant is None:
+                self.statusBar().showMessage("Select a calibrant first.")
+                return
+
+            cal = self._get_calibrant_from_ui()
+            if not any(cal.use_flags):
+                self.statusBar().showMessage("Enable at least one d-spacing ring.")
+                return
+
+            cfg = self._get_fit_config()
+
+            from pynika.io.hdf5_io import make_mask
+            inst = self._params.get("instrument", "SAXS")
+            mask = make_mask(self._image, inst)
+
+            try:
+                wl  = float(self._wl_edit.text())
+                pix = float(self._pix_edit.text())
+            except ValueError:
+                self.statusBar().showMessage("Invalid wavelength or pixel size.")
+                return
+
+            # Save current params so user can revert to pre-Auto-Fit state
+            self._pre_fit_params = self._get_params()
+            self._revert_btn.setEnabled(False)
+
+            p = self._get_params()
+
+            self._progress_bar.setRange(0, 3)
+            self._progress_bar.setValue(0)
+            self._fit_status_label.setText("Auto Fit Stage 1…")
+            self._chi2_label.setText("χ²/dof: —")
+            self._run_btn.setEnabled(False)
+            self._auto_fit_btn.setEnabled(False)
+
+            self._auto_fit_worker = AutoFitWorker(
+                self._image, mask, cal, wl, pix,
+                p["sdd"], p["bcx"], p["bcy"], p["tilt_x"], p["tilt_y"],
+                cfg,
+            )
+            self._auto_fit_thread = QThread()
+            self._auto_fit_worker.moveToThread(self._auto_fit_thread)
+
+            self._auto_fit_thread.started.connect(self._auto_fit_worker.run)
+            self._auto_fit_worker.stage_update.connect(self._on_auto_fit_progress)
+            self._auto_fit_worker.finished.connect(self._on_auto_fit_finished)
+            self._auto_fit_worker.finished.connect(self._auto_fit_thread.quit)
+            self._auto_fit_thread.finished.connect(self._on_auto_fit_thread_done)
+
+            self._auto_fit_thread.start()
+
+        def _on_auto_fit_thread_done(self) -> None:
+            self._run_btn.setEnabled(True)
+            self._auto_fit_btn.setEnabled(True)
+
+        def _on_auto_fit_progress(self, message: str, stage: int) -> None:
+            self._progress_bar.setValue(stage - 1)
+            self._fit_status_label.setText(message)
+
+        def _on_auto_fit_finished(self, result, message: str) -> None:
+            self._progress_bar.setValue(3)
+            self._revert_btn.setEnabled(True)
+
+            if result is None or result.n_peaks_used == 0:
+                self._chi2_label.setText("χ²/dof: —")
+                self._fit_status_label.setText(f"Auto Fit FAILED: {message}")
+                self.statusBar().showMessage(f"Auto Fit failed: {message}")
+                return
+
+            chi2_val = result.chi_square
+            chi2_str = f"{chi2_val:.4f}" if np.isfinite(chi2_val) else "—"
+            self._chi2_label.setText(f"χ²/dof: {chi2_str}")
+
+            # Update spinboxes with result values regardless of success
+            fit_vals = [result.sdd, result.bcx, result.bcy, result.tilt_x, result.tilt_y]
+            for spin, val in zip(self._fit_value_spins, fit_vals):
+                spin.blockSignals(True)
+                spin.setValue(val)
+                spin.blockSignals(False)
+            self._update_overlays()
+
+            if result.success:
+                self._fit_status_label.setText(
+                    f"Auto Fit OK — {result.n_peaks_used} peaks | {message}"
+                )
+                self.statusBar().showMessage(
+                    f"Auto Fit converged: χ²/dof={chi2_str}, {result.n_peaks_used} peaks"
+                )
+            else:
+                self._fit_status_label.setText(f"Auto Fit FAILED — {message}")
+                self.statusBar().showMessage(f"Auto Fit failed: {message}")
 
         def _on_fit_progress(self, ring_i: int, n_rings: int) -> None:
             self._progress_bar.setValue(ring_i + 1)

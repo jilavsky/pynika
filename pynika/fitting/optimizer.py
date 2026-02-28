@@ -52,7 +52,7 @@ class FitConfig:
     tilt_y_limits: tuple[float, float] = (-45.0, 45.0)
 
     min_amplitude_sigma: float = 2.0   # peak must exceed background by N*std
-    min_peaks_per_ring: int = 10       # minimum fitted peaks per d-spacing
+    min_peaks_per_ring: int = 3        # minimum fitted peaks per d-spacing
 
 
 # ---------------------------------------------------------------------------
@@ -467,7 +467,7 @@ def optimise_geometry(
     v_final = decode(result.x)
     n_dof = max(1, len(all_peaks) * 2 - len(param_names))
     chi2 = float(np.sum(result.fun**2)) / n_dof
-    success = bool(result.success) and chi2 < 1000.0
+    success = bool(result.success) and chi2 < 1.0
 
     log.info(
         "Optimisation %s: chi2/dof=%.4g px², %d peaks, cost=%.4g, msg=%s",

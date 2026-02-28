@@ -164,6 +164,129 @@ class Calibrator:
     # Output methods
     # ------------------------------------------------------------------
 
+    def auto_calibrate(self, hdf5_path: str) -> CalibrationResult:
+        """
+        Run the automatic multi-stage calibration procedure.
+
+        Stage 1: first 2 enabled d-spacings only, fitting SDD+BCx+BCy only.
+                 Aborts if chi²/dof >= 5.0 or no peaks are found.
+        Stage 2: all enabled d-spacings, all free parameters.
+                 Returns immediately on success if chi²/dof < 0.2.
+        Stage 3: repeated full fit from Stage 2 result.
+                 chi²/dof < 1.0 → success; >= 1.0 → failure.
+
+        Does not write anything to disk or PVs — call save_to_hdf5() /
+        save_to_pvs() separately.
+        """
+        import copy
+        import numpy as np
+        from pynika.io.hdf5_io import load_image_and_params
+        from pynika.calibrants import get_calibrant
+        from pynika.fitting.optimizer import optimise_geometry, FitConfig
+
+        log.info("Auto-calibrating %s with %s", self.instrument, hdf5_path)
+
+        data = load_image_and_params(hdf5_path)
+        image    = data["image"];  mask     = data["mask"]
+        sdd0     = data["sdd"];    pix      = data["pixel_size"]
+        wl       = data["wavelength"]
+        bcx0     = data["bcx"];    bcy0     = data["bcy"]
+        tilt_x0  = data["tilt_x"]; tilt_y0  = data["tilt_y"]
+
+        calibrant_name = self._inst_config.get("calibrant", "AgBehenate")
+        calibrant = get_calibrant(calibrant_name)
+        config    = self.fit_config if self.fit_config is not None else FitConfig()
+
+        # ── Stage 1: first 2 enabled d-spacings, SDD+BCx+BCy only ──────────
+        cal_1 = copy.deepcopy(calibrant)
+        enabled = [i for i, f in enumerate(cal_1.use_flags) if f]
+        for i in range(len(cal_1.use_flags)):
+            cal_1.use_flags[i] = i in enabled[:2]
+
+        cfg_1 = FitConfig()
+        cfg_1.step_deg          = config.step_deg
+        cfg_1.transverse_px     = config.transverse_px
+        cfg_1.fit_sdd           = True
+        cfg_1.fit_bcx           = True
+        cfg_1.fit_bcy           = True
+        cfg_1.fit_tilt_x        = False
+        cfg_1.fit_tilt_y        = False
+        cfg_1.sdd_limits        = config.sdd_limits
+        cfg_1.bcx_limits        = config.bcx_limits
+        cfg_1.bcy_limits        = config.bcy_limits
+        cfg_1.min_peaks_per_ring = config.min_peaks_per_ring
+
+        log.info("Auto Fit Stage 1: first 2 d-spacings, SDD+BCx+BCy")
+        r1 = optimise_geometry(
+            image, mask, cal_1, wl, pix,
+            sdd_init=sdd0, bcx_init=bcx0, bcy_init=bcy0,
+            tilt_x_init=tilt_x0, tilt_y_init=tilt_y0,
+            config=cfg_1,
+        )
+        chi1 = r1.chi_square if np.isfinite(r1.chi_square) else 1e9
+        if r1.n_peaks_used == 0 or chi1 >= 5.0:
+            log.warning(
+                "Auto Fit Stage 1 failed: chi²/dof=%.4g, %d peaks", chi1, r1.n_peaks_used
+            )
+            return CalibrationResult(
+                sdd_mm=r1.sdd, bcx=r1.bcx, bcy=r1.bcy,
+                tilt_x=r1.tilt_x, tilt_y=r1.tilt_y,
+                chi_square=chi1, n_peaks=r1.n_peaks_used,
+                success=False,
+                message=f"Auto Fit Stage 1 failed (chi²/dof={chi1:.4g}, need <5.0)",
+                instrument=self.instrument, hdf5_path=hdf5_path,
+            )
+
+        # ── Stage 2: all d-spacings, all free parameters ────────────────────
+        log.info(
+            "Auto Fit Stage 2: all d-spacings, all parameters (Stage 1 chi²=%.4g)", chi1
+        )
+        r2 = optimise_geometry(
+            image, mask, calibrant, wl, pix,
+            sdd_init=r1.sdd, bcx_init=r1.bcx, bcy_init=r1.bcy,
+            tilt_x_init=r1.tilt_x, tilt_y_init=r1.tilt_y,
+            config=config,
+        )
+        chi2 = r2.chi_square if np.isfinite(r2.chi_square) else 1e9
+        if chi2 < 0.2:
+            log.info("Auto Fit Stage 2 converged: chi²/dof=%.4f", chi2)
+            return CalibrationResult(
+                sdd_mm=r2.sdd, bcx=r2.bcx, bcy=r2.bcy,
+                tilt_x=r2.tilt_x, tilt_y=r2.tilt_y,
+                chi_square=chi2, n_peaks=r2.n_peaks_used,
+                success=True,
+                message=f"Auto Fit converged at Stage 2 (chi²/dof={chi2:.4f})",
+                instrument=self.instrument, hdf5_path=hdf5_path,
+            )
+
+        # ── Stage 3: refine from Stage 2 result ─────────────────────────────
+        log.info(
+            "Auto Fit Stage 3: refinement pass (Stage 2 chi²=%.4g)", chi2
+        )
+        r3 = optimise_geometry(
+            image, mask, calibrant, wl, pix,
+            sdd_init=r2.sdd, bcx_init=r2.bcx, bcy_init=r2.bcy,
+            tilt_x_init=r2.tilt_x, tilt_y_init=r2.tilt_y,
+            config=config,
+        )
+        chi3 = r3.chi_square if np.isfinite(r3.chi_square) else 1e9
+        success = chi3 < 1.0
+        log.info(
+            "Auto Fit Stage 3 complete: chi²/dof=%.4f [%s]",
+            chi3, "OK" if success else "FAILED",
+        )
+        return CalibrationResult(
+            sdd_mm=r3.sdd, bcx=r3.bcx, bcy=r3.bcy,
+            tilt_x=r3.tilt_x, tilt_y=r3.tilt_y,
+            chi_square=chi3, n_peaks=r3.n_peaks_used,
+            success=success,
+            message=(
+                f"Auto Fit Stage 3: chi²/dof={chi3:.4f} "
+                f"[{'OK' if success else 'FAILED — chi²≥1'}]"
+            ),
+            instrument=self.instrument, hdf5_path=hdf5_path,
+        )
+
     def save_to_hdf5(self, hdf5_path: str, result: CalibrationResult) -> None:
         """Write optimised parameters back into the HDF5 file."""
         if not result.success:
