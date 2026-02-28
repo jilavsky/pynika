@@ -63,7 +63,10 @@ def _put(pv_name: str, value: float | str, label: str = "", timeout: float = 5.0
 
     try:
         pv = _epics.PV(pv_name, connection_timeout=timeout)
-        if not pv.connected:
+        # wait_for_connection blocks until the CA connection callback fires
+        # (or the timeout expires).  Checking pv.connected immediately after
+        # PV() is not reliable — the callback is asynchronous.
+        if not pv.wait_for_connection(timeout=timeout):
             print(f"  [PV UNREACHABLE] {pv_name:<40s} = {value!r:<16}{tag}")
             log.warning("PV unreachable: %s", pv_name)
             return False
