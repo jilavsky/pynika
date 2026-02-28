@@ -186,7 +186,7 @@ def launch_gui() -> None:
             self._log_cb = QCheckBox("Log intensity scale")
             self._log_cb.setChecked(True)
             left_layout.addWidget(self._log_cb)
-            self._log_cb.toggled.connect(self._update_image_display)
+            self._log_cb.toggled.connect(lambda _: self._update_image_display(reset_view=False))
 
             # 6.6 — calibrant selector (signal connected AFTER table is built)
             self._build_calibrant_group(left_layout)
@@ -388,6 +388,10 @@ def launch_gui() -> None:
                 self._fit_high_edits.append(hi_edit)
 
             self._fit_table.resizeRowsToContents()
+            # Constrain table height so there is no empty space below the rows
+            _row_h = self._fit_table.rowHeight(0) if self._fit_table.rowCount() else 28
+            _hdr_h = self._fit_table.horizontalHeader().height()
+            self._fit_table.setMaximumHeight(_hdr_h + _row_h * 5 + 4)
             v.addWidget(self._fit_table)
 
             # 6.10 — No limits checkbox
@@ -395,6 +399,7 @@ def launch_gui() -> None:
             self._no_limits_cb.toggled.connect(self._on_no_limits_changed)
             v.addWidget(self._no_limits_cb)
 
+            grp.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
             layout.addWidget(grp)
 
         # ..........................................
@@ -457,10 +462,22 @@ def launch_gui() -> None:
             p = self._get_params()
             inst = self._params.get("instrument", "SAXS")
             try:
+                import datetime
                 from pynika.io.hdf5_io import save_params_to_hdf5
+                ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                chi2_text = self._chi2_label.text()  # e.g. "χ²/dof: 2.31"
+                report_msg = (
+                    f"pyNika OK: {inst} calibrated {ts}\n"
+                    f"  file: {path}\n"
+                    f"  SDD={p['sdd']:.3f} mm, BCx={p['bcx']:.3f}, "
+                    f"BCy={p['bcy']:.3f}, TiltX={p['tilt_x']:.4f}, "
+                    f"TiltY={p['tilt_y']:.4f}\n"
+                    f"  {chi2_text}"
+                )
                 save_params_to_hdf5(
                     path, inst,
                     p["sdd"], p["bcx"], p["bcy"], p["tilt_x"], p["tilt_y"],
+                    calibration_report=report_msg,
                 )
                 self.statusBar().showMessage(
                     f"Saved parameters to {os.path.basename(path)}"
@@ -701,8 +718,11 @@ def launch_gui() -> None:
             v.setContentsMargins(0, 0, 0, 0)
 
             self._gview = pg.GraphicsLayoutWidget()
-            self._plot = self._gview.addPlot()
-            self._plot.setAspectLocked(True)   # 1:1 pixel ratio; unused space filled with background
+            # Light (white) background instead of the default black
+            self._gview.setBackground("w")
+
+            self._plot = self._gview.addPlot(row=0, col=0)
+            self._plot.setAspectLocked(True)   # 1:1 pixel ratio
             self._plot.invertY(True)   # row 0 at top (standard image convention)
             self._plot.setLabel("bottom", "Column (px)")
             self._plot.setLabel("left", "Row (px)")
@@ -710,11 +730,19 @@ def launch_gui() -> None:
             # 2-D image item
             self._img_item = pg.ImageItem()
             self._plot.addItem(self._img_item)
-            try:
-                cmap = pg.colormap.get("viridis")
-            except Exception:
-                cmap = pg.colormap.get("grey")
-            self._img_item.setColorMap(cmap)
+
+            # HistogramLUT — provides intensity range slider + gradient colour-table editor
+            self._lut = pg.HistogramLUTItem()
+            self._lut.setImageItem(self._img_item)
+            self._gview.addItem(self._lut, row=0, col=1)
+            # Start with terrain-like colour map if available, fallback to viridis
+            for _cmap_name in ("CET-L17", "terrain", "viridis", "grey"):
+                try:
+                    _cmap = pg.colormap.get(_cmap_name)
+                    self._lut.gradient.setColorMap(_cmap)
+                    break
+                except Exception:
+                    continue
 
             # 6.11 — beam-center crosshair (red "+" scatter symbol)
             self._bc_dot = pg.ScatterPlotItem(
@@ -725,8 +753,52 @@ def launch_gui() -> None:
             )
             self._plot.addItem(self._bc_dot)
 
+            # Right-click context menu additions (colour table + save JPG)
+            self._plot.getViewBox().menu.addSeparator()
+            _save_jpg_action = self._plot.getViewBox().menu.addAction("Save image as JPG…")
+            _save_jpg_action.triggered.connect(self._on_save_image_jpg)
+            _cmap_menu = self._plot.getViewBox().menu.addMenu("Color table")
+            for _name in ("viridis", "plasma", "inferno", "magma", "hot",
+                          "grey", "CET-L17", "CET-L16", "CET-R4",
+                          "terrain", "bwr", "hsv"):
+                def _make_cmap_setter(n):
+                    def _set():
+                        try:
+                            _c = pg.colormap.get(n)
+                            self._lut.gradient.setColorMap(_c)
+                        except Exception as _e:
+                            self.statusBar().showMessage(f"Color map '{n}' not available: {_e}")
+                    return _set
+                _act = _cmap_menu.addAction(_name)
+                _act.triggered.connect(_make_cmap_setter(_name))
+
             v.addWidget(self._gview)
             splitter.addWidget(right_widget)
+
+        def _on_save_image_jpg(self) -> None:
+            """Save the current image (with overlays) as a JPG file."""
+            from PyQt6.QtWidgets import QFileDialog
+            import datetime
+            default_name = (
+                "pynika_image_"
+                + datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                + ".jpg"
+            )
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save Image as JPG", default_name,
+                "JPEG files (*.jpg *.jpeg);;All files (*.*)",
+            )
+            if not path:
+                return
+            try:
+                pixmap = self._gview.grab()
+                ok = pixmap.save(path, "JPEG", quality=95)
+                if ok:
+                    self.statusBar().showMessage(f"Image saved to {path}")
+                else:
+                    self.statusBar().showMessage("JPG save failed.")
+            except Exception as exc:
+                self.statusBar().showMessage(f"JPG save error: {exc}")
 
         # -------------------------------------------------------------------
         # Slots / event handlers
@@ -796,11 +868,13 @@ def launch_gui() -> None:
             if self._image is None:
                 return
             img = self._image.copy()
+            # Clamp out-of-range pixels before display so they don't distort the scale
+            img = np.where((img < 0) | (img > 1e8), 0.0, img)
             if self._log_cb.isChecked():
                 img = np.log10(np.where(img > 0, img, 1.0))
             # pyqtgraph ImageItem first axis = x (columns), second = y (rows)
             # our image is (ny, nx) → transpose to (nx, ny)
-            self._img_item.setImage(img.T, autoLevels=True)
+            self._img_item.setImage(img.T, autoLevels=reset_view)
             if reset_view:
                 # autoRange fits the view to the ImageItem with ~4% padding;
                 # setAspectLocked(True) then pads the shorter axis with grey background.
@@ -908,7 +982,7 @@ def launch_gui() -> None:
             wl  = self._params["wavelength"]
             pix = self._params["pixel_size"]
 
-            from pynika.geometry import ring_xy_tilted, d_to_pixel_radius
+            from pynika.geometry import ring_xy_tilted
 
             for i, (use_cb, w_spin) in enumerate(self._d_rows):
                 if not use_cb.isChecked():
@@ -933,26 +1007,34 @@ def launch_gui() -> None:
                     self._plot.addItem(ring_item)
                     self._ring_items.append(ring_item)
 
-                # 6.12b — yellow dashed bands: ±search width (circular approx.)
-                try:
-                    r_nom = d_to_pixel_radius(d, wl, p["sdd"], pix)
-                except ValueError:
-                    continue
-                angles = np.linspace(0.0, 2.0 * np.pi, 360, endpoint=False)
-                for r_band in (r_nom - w, r_nom + w):
-                    if r_band <= 0:
-                        continue
-                    xb = p["bcx"] + r_band * np.cos(angles)
-                    yb = p["bcy"] + r_band * np.sin(angles)
-                    band_item = pg.PlotDataItem(
-                        xb, yb,
-                        pen=pg.mkPen(
-                            "y", width=1.0,
-                            style=Qt.PenStyle.DashLine,
-                        ),
+                # 6.12b — yellow dashed bands: ±search width following the tilted ring
+                # Use the tilted-model ring to get the correct radial distance at each
+                # azimuthal angle, then offset ±W pixels along that radial direction.
+                if len(x_ring) >= 3:
+                    angles = np.linspace(0.0, 2.0 * np.pi, len(x_ring), endpoint=False)
+                    cos_a = np.cos(angles)
+                    sin_a = np.sin(angles)
+                    dx = x_ring - p["bcx"]
+                    dy = y_ring - p["bcy"]
+                    r_tilted = np.where(
+                        np.isfinite(dx) & np.isfinite(dy),
+                        np.sqrt(dx**2 + dy**2),
+                        np.nan,
                     )
-                    self._plot.addItem(band_item)
-                    self._band_items.append(band_item)
+                    for sign in (-1.0, +1.0):
+                        r_band = r_tilted + sign * w
+                        xb = np.where(r_band > 0, p["bcx"] + r_band * cos_a, np.nan)
+                        yb = np.where(r_band > 0, p["bcy"] + r_band * sin_a, np.nan)
+                        band_item = pg.PlotDataItem(
+                            xb, yb,
+                            pen=pg.mkPen(
+                                "y", width=1.0,
+                                style=Qt.PenStyle.DashLine,
+                            ),
+                            connect="finite",
+                        )
+                        self._plot.addItem(band_item)
+                        self._band_items.append(band_item)
 
         # ..........................................
         # 6.13 + 6.14 — Run Fit section
@@ -962,41 +1044,39 @@ def launch_gui() -> None:
             grp = QGroupBox("Optimisation")
             v = QVBoxLayout(grp)
 
-            # Azimuthal step angle control
-            row_step = QHBoxLayout()
-            row_step.addWidget(QLabel("Azimuthal step (°):"))
+            # Row 1 — azimuthal step + strip half-width on same line
+            row_controls = QHBoxLayout()
+            row_controls.addWidget(QLabel("Az. step (°):"))
             self._step_spin = QDoubleSpinBox()
             self._step_spin.setRange(0.1, 90.0)
             self._step_spin.setValue(1.0)
             self._step_spin.setSingleStep(0.5)
             self._step_spin.setDecimals(1)
+            self._step_spin.setMaximumWidth(60)
             self._step_spin.setToolTip(
                 "Angular step between radial line profiles.\n"
                 "Smaller = more peaks found but slower.\n"
                 "1° gives 360 directions per ring."
             )
-            row_step.addWidget(self._step_spin)
-            row_step.addStretch()
-            v.addLayout(row_step)
-
-            # Strip transverse half-width control
-            row_trans = QHBoxLayout()
-            row_trans.addWidget(QLabel("Strip half-width (px):"))
+            row_controls.addWidget(self._step_spin)
+            row_controls.addSpacing(8)
+            row_controls.addWidget(QLabel("Strip ½-W (px):"))
             self._transverse_spin = QDoubleSpinBox()
             self._transverse_spin.setRange(1.0, 50.0)
             self._transverse_spin.setValue(5.0)
             self._transverse_spin.setSingleStep(0.5)
             self._transverse_spin.setDecimals(1)
+            self._transverse_spin.setMaximumWidth(60)
             self._transverse_spin.setToolTip(
                 "Half-width of the averaging strip perpendicular\n"
                 "to the radial direction for each peak profile.\n"
                 "Wider = smoother profile but less spatial resolution."
             )
-            row_trans.addWidget(self._transverse_spin)
-            row_trans.addStretch()
-            v.addLayout(row_trans)
+            row_controls.addWidget(self._transverse_spin)
+            row_controls.addStretch()
+            v.addLayout(row_controls)
 
-            # Run / Revert buttons on the same row
+            # Row 2 — Run / Revert buttons
             btn_row = QHBoxLayout()
             self._run_btn = QPushButton("Run Fit")
             self._run_btn.clicked.connect(self._on_run_fit)
@@ -1013,13 +1093,15 @@ def launch_gui() -> None:
             self._progress_bar.setValue(0)
             v.addWidget(self._progress_bar)
 
-            # chi² and status labels (6.14)
+            # Row 3 — chi² and status on the same line (6.14)
+            row_result = QHBoxLayout()
             self._chi2_label = QLabel("χ²/dof: —")
-            v.addWidget(self._chi2_label)
-
+            row_result.addWidget(self._chi2_label)
+            row_result.addSpacing(8)
             self._fit_status_label = QLabel("Status: idle")
-            self._fit_status_label.setWordWrap(True)
-            v.addWidget(self._fit_status_label)
+            self._fit_status_label.setWordWrap(False)
+            row_result.addWidget(self._fit_status_label, stretch=1)
+            v.addLayout(row_result)
 
             layout.addWidget(grp)
 

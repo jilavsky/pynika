@@ -201,16 +201,16 @@ pyNika FAILED: SAXS calibration 2025-03-01 14:23:05
 
 ## Phase 7 — Testing, Validation, and Documentation
 
-| # | Task | Notes |
-|---|------|-------|
-| 7.1 | Validate SAXS calibration against known Nika output for `examples/SAXS.hdf` | Record reference values in a test fixture |
-| 7.2 | Validate WAXS calibration against known Nika output for `examples/WAXS.hdf` | |
-| 7.3 | Define and tune χ²/n_dof success threshold empirically | Document chosen value in code and spec |
-| 7.4 | Test graceful failure: ring outside detector | Synthetic image with narrow beam-stop |
-| 7.5 | Test graceful EPICS degradation on off-beamline workstation | Mock pyepics or temporarily remove it |
-| 7.6 | API reference documentation | Write docstrings for all public functions; generate with Sphinx or pdoc |
-| 7.7 | User guide | Step-by-step walkthrough for beamline use |
-| 7.8 | Continuous Integration (GitHub Actions) | Run `pytest` on push; test Python 3.10–3.12 |
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 7.1 | Validate SAXS calibration against known Nika output for `examples/SAXS.hdf` | ✅ Done | Validated manually; results match Igor/Nika output sufficiently |
+| 7.2 | Validate WAXS calibration against known Nika output for `examples/WAXS.hdf` | ✅ Done | Validated manually; results match Igor/Nika output sufficiently |
+| 7.3 | Define and tune χ²/n_dof success threshold empirically | Pending | Document chosen value in code and spec |
+| 7.4 | Test graceful failure: ring outside detector | Pending | Synthetic image with narrow beam-stop |
+| 7.5 | Test graceful EPICS degradation on off-beamline workstation | Pending | Mock pyepics or temporarily remove it |
+| 7.6 | API reference documentation | Pending | Write docstrings for all public functions; generate with Sphinx or pdoc |
+| 7.7 | User guide | Pending | Step-by-step walkthrough for beamline use |
+| 7.8 | Continuous Integration (GitHub Actions) | Pending | Run `pytest` on push; test Python 3.10–3.12 |
 
 ---
 

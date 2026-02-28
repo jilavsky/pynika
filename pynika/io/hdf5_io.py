@@ -145,10 +145,12 @@ def make_mask(image: np.ndarray, instrument: str) -> np.ndarray:
     mask = np.zeros(image.shape, dtype=bool)
 
     if instrument == "SAXS":
-        mask[image < 0] = True
-        mask[:4, :]      = True   # dead band y=0–3   (was mask[:, :4] on raw image)
-        mask[242:245, :] = True   # dead band y=242–244 (was mask[:, 242:245] on raw)
+        mask[image < 0]    = True
+        mask[image > 1e8]  = True
+        mask[:4, :]        = True   # dead band y=0–3   (was mask[:, :4] on raw image)
+        mask[242:245, :]   = True   # dead band y=242–244 (was mask[:, 242:245] on raw)
     elif instrument == "WAXS":
+        mask[image < 0]    = True
         mask[image > 1e7]  = True
         mask[511:516, :]   = True   # module gap (was mask[:, 511:516] on raw)
         mask[1026:1041, :] = True   # module gap (was mask[:, 1026:1041] on raw)
@@ -169,17 +171,35 @@ def save_params_to_hdf5(
     bcy: float,
     tilt_x: float,
     tilt_y: float,
+    calibration_report: str = "",
 ) -> None:
     """
     Write optimised calibration parameters back into the HDF5 file.
 
-    Updates /entry/instrument/detector datasets and /entry/Metadata scalars.
+    Updates /entry/instrument/detector datasets, /entry/Metadata scalars,
+    and /entry/instrument/detector/CalibrationReport (created if absent).
     """
     with h5py.File(hdf5_path, "r+") as f:
         det = f["/entry/instrument/detector"]
         det["distance"][()]      = sdd
         det["beam_center_x"][()] = bcx
         det["beam_center_y"][()] = bcy
+
+        # Write CalibrationReport string dataset (create or overwrite)
+        if calibration_report:
+            _str_dtype = (
+                h5py.string_dtype()
+                if hasattr(h5py, "string_dtype")
+                else h5py.special_dtype(vlen=str)
+            )
+            if "CalibrationReport" in det:
+                # Delete and recreate to safely handle dtype changes
+                del det["CalibrationReport"]
+            det.create_dataset(
+                "CalibrationReport",
+                data=calibration_report,
+                dtype=_str_dtype,
+            )
 
         meta = f["/entry/Metadata"]
         if instrument == "SAXS":
