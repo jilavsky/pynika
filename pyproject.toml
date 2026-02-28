@@ -4,16 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pynika"
-version = "0.1.0"
+version = "1.0.0"
 description = "Calibration tool for small-angle and wide-angle pinhole X-ray scattering instruments"
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [
-    { name = "Ivan Ilavsky", email = "ilavsky@aps.anl.gov" },
+    { name = "Jan Ilavsky", email = "ilavsky@anl.gov" },
 ]
 keywords = ["SAXS", "WAXS", "X-ray scattering", "calibration", "synchrotron"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Physics",
     "License :: OSI Approved :: MIT License",

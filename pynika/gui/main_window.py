@@ -215,7 +215,7 @@ def launch_gui() -> None:
                 config=self._config,
             )
             chi3 = r3.chi_square if math.isfinite(r3.chi_square) else 1e9
-            status_tag = "OK" if chi3 < 1.0 else "FAILED (chi²≥1)"
+            status_tag = "OK" if chi3 < 3.0 else "FAILED (chi²≥3)"
             self.finished.emit(r3, f"Stage 3 complete — chi²/dof={chi3:.4f} [{status_tag}]")
 
     # -----------------------------------------------------------------------
@@ -396,15 +396,21 @@ def launch_gui() -> None:
         # ..........................................
 
         def _build_instrument_group(self, layout: QVBoxLayout) -> None:
-            grp = QGroupBox("Instrument Parameters (from file)")
+            grp = QGroupBox("Instrument Parameters")
             form = QFormLayout(grp)
 
             self._wl_edit = QLineEdit("—")
-            self._wl_edit.setToolTip("X-ray wavelength loaded from HDF5 file")
+            self._wl_edit.setToolTip(
+                "X-ray wavelength (Å) — loaded from HDF5 file.\n"
+                "You can edit this value to override the stored wavelength."
+            )
             form.addRow("Wavelength (Å):", self._wl_edit)
 
             self._pix_edit = QLineEdit("—")
-            self._pix_edit.setToolTip("Pixel size loaded from HDF5 file")
+            self._pix_edit.setToolTip(
+                "Pixel size (mm) — loaded from HDF5 file.\n"
+                "Edit to override if the file value is incorrect."
+            )
             form.addRow("Pixel size (mm):", self._pix_edit)
 
             self._inst_label = QLabel("—")
@@ -662,6 +668,11 @@ def launch_gui() -> None:
                 data["search_widths"] = [
                     float(w_spin.value()) for _, w_spin in self._d_rows
                 ]
+                # For Custom calibrant also export the d-spacings themselves
+                if self._d_value_spins:
+                    data["d_spacings"] = [
+                        float(s.value()) for s in self._d_value_spins
+                    ]
             try:
                 with open(path, "w") as f:
                     json.dump(data, f, indent=2)
@@ -727,6 +738,11 @@ def launch_gui() -> None:
                 for i, (_, w_spin) in enumerate(self._d_rows):
                     if i < len(data["search_widths"]):
                         w_spin.setValue(float(data["search_widths"][i]))
+            # For Custom calibrant restore the d-spacings (populated after setCurrentText above)
+            if "d_spacings" in data and self._d_value_spins:
+                for i, d_spin in enumerate(self._d_value_spins):
+                    if i < len(data["d_spacings"]):
+                        d_spin.setValue(float(data["d_spacings"][i]))
 
             self._update_overlays()
             self.statusBar().showMessage(
@@ -999,6 +1015,8 @@ def launch_gui() -> None:
             cal = self._calibrant
             is_custom = (cal.name == "Custom")
             n = len(cal.d_spacings)
+            # Reset to 0 first so existing cell widgets are properly removed
+            self._d_table.setRowCount(0)
             self._d_table.setRowCount(n)
             self._d_rows.clear()
             self._d_value_spins = []

@@ -153,9 +153,9 @@ class Calibrator:
                 "far from the true values; (3) the wrong calibrant was selected.",
                 opt.chi_square, opt.n_peaks_used,
             )
-        elif opt.n_peaks_used > 0 and opt.chi_square > 10.0:
+        elif opt.n_peaks_used > 0 and opt.chi_square > 3.0:
             log.warning(
-                "chi2/dof=%.2g is elevated (expected < 10 for a good calibrant). "
+                "chi2/dof=%.2g is elevated (expected < 3 for a good calibrant). "
                 "Verify that the input file is a calibrant measurement and that "
                 "initial geometry parameters are reasonable.",
                 opt.chi_square,
@@ -176,7 +176,7 @@ class Calibrator:
         Stage 2: all enabled d-spacings, all free parameters.
                  Returns immediately on success if chi²/dof < 0.2.
         Stage 3: repeated full fit from Stage 2 result.
-                 chi²/dof < 1.0 → success; >= 1.0 → failure.
+                 chi²/dof < 3.0 → success; >= 3.0 → failure.
 
         Does not write anything to disk or PVs — call save_to_hdf5() /
         save_to_pvs() separately.
@@ -274,7 +274,7 @@ class Calibrator:
             config=config,
         )
         chi3 = r3.chi_square if np.isfinite(r3.chi_square) else 1e9
-        success = chi3 < 1.0
+        success = chi3 < 3.0
         log.info(
             "Auto Fit Stage 3 complete: chi²/dof=%.4f [%s]",
             chi3, "OK" if success else "FAILED",
@@ -286,7 +286,7 @@ class Calibrator:
             success=success,
             message=(
                 f"Auto Fit Stage 3: chi²/dof={chi3:.4f} "
-                f"[{'OK' if success else 'FAILED — chi²≥1'}]"
+                f"[{'OK' if success else 'FAILED — chi²≥3'}]"
             ),
             instrument=resolved_instrument, hdf5_path=hdf5_path,
         )

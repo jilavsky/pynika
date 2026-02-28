@@ -1,6 +1,6 @@
 # pyNika
 
-**pyNika** is a Python package for calibrating small-angle and wide-angle pinhole X-ray scattering (SAXS/WAXS) instruments using diffraction rings from distance standards (calibrants). It reproduces the geometry conventions and calibration logic of the [Nika](https://usaxs.xray.aps.anl.gov/software/sas-igor) Igor Pro package so that calibration parameters remain fully compatible with the Nika-based data-reduction pipeline.
+**pyNika** is a Python package for calibrating small-angle and wide-angle pinhole X-ray scattering (SAXS/WAXS) devices at APS USAXS instrument (https://usaxs.xray.aps.anl.gov/) using diffraction rings from distance standards (calibrants). It reproduces the geometry conventions and calibration logic of the [Nika](https://usaxs.xray.aps.anl.gov/software/sas-igor) Igor Pro package so that calibration parameters remain fully compatible with the Nika-based data-reduction pipeline.
 
 ---
 
@@ -14,6 +14,17 @@
 - Optionally pushes parameters to EPICS process variables (PVs) via `pyepics`; always echoes the values to the console and degrades gracefully when PVs are unreachable.
 - **Qt6 GUI** (pyqtgraph image display, histogram LUT, colour-table selection, JPG export) for interactive inspection and manual refinement.
 - **CLI** for headless / pipeline use.
+
+---
+
+## Documentation
+
+| Guide | Description |
+|-------|-------------|
+| [Installation](docs/installation.md) | pip, conda, optional extras, beamline checklist, importing pynika from another package |
+| [GUI Usage](docs/gui_usage.md) | Interactive GUI reference: calibrant table, fit parameters, image controls, Export/Import JSON |
+| [CLI Usage](docs/cli_usage.md) | Command-line option reference, auto-fit stages, batch processing |
+| [Python API](docs/python_api.md) | `Calibrator`, `CalibrationResult`, `FitConfig`, low-level API, batch script example |
 
 ---
 
@@ -129,7 +140,7 @@ pynika --help
 | `--file FILE` | — | Path to HDF5 data file (required in non-GUI mode) |
 | `--instrument` | `SAXS` | `SAXS`, `WAXS`, or `Custom` |
 | `--config FILE` | — | JSON config file (required for `Custom`) |
-| `--auto-fit` | off | Multi-stage automatic fit (recommended): Stage 1 fits SDD+BCx+BCy with first 2 rings; Stages 2–3 fit all parameters with all rings; chi²<1 = success |
+| `--auto-fit` | off | Multi-stage automatic fit (recommended): Stage 1 fits SDD+BCx+BCy with first 2 rings; Stages 2–3 fit all parameters with all rings; chi²<3 = success |
 | `--save-to-pvs` | off | Push results to EPICS PVs |
 | `--gui` | off | Launch the Qt6 GUI |
 | `--verbose` / `-v` | off | Enable DEBUG logging |
@@ -144,7 +155,7 @@ cal = Calibrator(instrument="SAXS")
 result = cal.auto_calibrate("/data/SAXS.hdf")
 # Stage 1: first 2 d-spacings, SDD+BCx+BCy only (abort if chi²≥5)
 # Stage 2: all d-spacings, all parameters      (done if chi²<0.2)
-# Stage 3: refinement pass                     (success if chi²<1)
+# Stage 3: refinement pass                     (success if chi²<3)
 
 # ── Basic single-pass calibration ─────────────────────────────
 cal = Calibrator(instrument="SAXS")          # or "WAXS"

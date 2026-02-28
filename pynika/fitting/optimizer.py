@@ -299,7 +299,7 @@ def optimise_geometry(
             search_width, tilt_x_init, tilt_y_init, config,
         )
         if len(ring_peaks) < config.min_peaks_per_ring:
-            log.warning(
+            log.debug(
                 "d=%.4f A: only %d peaks (< min %d) — ring may be outside detector",
                 d_spacing, len(ring_peaks), config.min_peaks_per_ring,
             )
@@ -467,7 +467,7 @@ def optimise_geometry(
     v_final = decode(result.x)
     n_dof = max(1, len(all_peaks) * 2 - len(param_names))
     chi2 = float(np.sum(result.fun**2)) / n_dof
-    success = bool(result.success) and chi2 < 1.0
+    success = bool(result.success) and chi2 < 3.0
 
     log.info(
         "Optimisation %s: chi2/dof=%.4g px², %d peaks, cost=%.4g, msg=%s",

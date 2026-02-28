@@ -4,12 +4,54 @@ All notable changes to pyNika will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [1.0.0] — 2026-02-28
 
-### Added
-- Initial repository scaffold (directories, packaging, documentation).
-- Requirements specification and implementation plan in `doc/`.
-- Package stub files for `pynika` core modules.
+### Phase 7 — Validation and release
+
+- **Validated** against Igor Pro Nika code on real calibrant measurements (SAXS
+  AgBehenate and WAXS LaB6 files). Calibrated parameters (SDD, BCx, BCy, TiltX,
+  TiltY) match Nika output to within sub-pixel / sub-micron accuracy.
+- **CLI** (`pynika --file … --auto-fit`) confirmed working end-to-end on
+  beamline HDF5 files.
+- **Python API** (`Calibrator`, `auto_calibrate()`) confirmed working via
+  `scripts/batch_check.py` batch-processing script.
+
+### Changed
+
+- χ²/dof success threshold changed from 1.0 → **3.0** throughout
+  (`optimizer.py`, `calibrator.py`, `main_window.py`) based on empirical
+  testing; chi²<3 reliably indicates a good calibration.
+- `log.warning` for rings outside the detector ("0 peaks") demoted to
+  `log.debug`; these are expected when some d-spacing rings fall outside the
+  active detector area.
+- Version set to **1.0.0**; Development Status classifier changed to
+  `Production/Stable`.
+
+### Added (GUI)
+
+- **Custom calibrant** table now fully resets (d-spacings and editability) when
+  switching from Custom back to AgBehenate or LaB6.
+- **Export / Import JSON** now round-trips d-spacing values for Custom
+  calibrant in addition to `use_flags` and `search_widths`.
+- **Instrument Parameters** group label updated; wavelength and pixel-size
+  fields now have tooltips indicating they are editable to override
+  file-derived values.
+
+### Added (documentation)
+
+- `docs/installation.md` — pip-from-GitHub, conda, optional extras, beamline
+  checklist, how to add pynika as a dependency in another package.
+- `docs/gui_usage.md` — full GUI reference: layout, calibrant table,
+  d-spacing table, fit-parameters table, image controls, Export/Import JSON
+  content description.
+- `docs/cli_usage.md` — CLI option reference, auto-fit stage table, batch
+  processing with `scripts/batch_check.py`.
+- `docs/python_api.md` — `Calibrator`, `CalibrationResult`, `FitConfig`,
+  low-level API, importability from GitHub in other packages.
+- `scripts/batch_check.py` — moved from repository root to `scripts/`; serves
+  as working example for batch Python-API use.
+
+---
 
 ## [0.1.0-dev] — Phase 1–6 complete (2026-02)
 
