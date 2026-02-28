@@ -64,16 +64,18 @@ class Calibrator:
 
     Parameters
     ----------
-    instrument : "SAXS", "WAXS", or "Custom"
+    instrument : "SAXS", "WAXS", "Custom", or "auto" (default)
+        When "auto", the instrument is detected from the HDF5 file
+        metadata each time calibrate() / auto_calibrate() is called.
     config_file : path to a JSON config file (required for Custom)
     fit_config  : pynika.fitting.optimizer.FitConfig — override fitting defaults
     """
 
-    INSTRUMENTS = ("SAXS", "WAXS", "Custom")
+    INSTRUMENTS = ("SAXS", "WAXS", "Custom", "auto")
 
     def __init__(
         self,
-        instrument: str = "SAXS",
+        instrument: str = "auto",
         config_file: Optional[str] = None,
         fit_config=None,
     ) -> None:
@@ -99,10 +101,11 @@ class Calibrator:
         from pynika.calibrants import get_calibrant
         from pynika.fitting.optimizer import optimise_geometry, FitConfig
 
-        log.info("Calibrating %s with %s", self.instrument, hdf5_path)
-
         # 1. Load data
         data = load_image_and_params(hdf5_path)
+        resolved_instrument, inst_config = self._resolve_instrument_and_config(data)
+        log.info("Calibrating %s with %s", resolved_instrument, hdf5_path)
+
         image    = data["image"]
         mask     = data["mask"]
         sdd0     = data["sdd"]
@@ -114,7 +117,7 @@ class Calibrator:
         tilt_y0  = data["tilt_y"]
 
         # 2. Get calibrant
-        calibrant_name = self._inst_config.get("calibrant", "AgBehenate")
+        calibrant_name = inst_config.get("calibrant", "AgBehenate")
         calibrant = get_calibrant(calibrant_name)
 
         # 3. Run optimisation
@@ -136,7 +139,7 @@ class Calibrator:
             n_peaks=opt.n_peaks_used,
             success=opt.success,
             message=opt.message,
-            instrument=self.instrument,
+            instrument=resolved_instrument,
             hdf5_path=hdf5_path,
         )
         log.info("%s", result)
@@ -184,16 +187,17 @@ class Calibrator:
         from pynika.calibrants import get_calibrant
         from pynika.fitting.optimizer import optimise_geometry, FitConfig
 
-        log.info("Auto-calibrating %s with %s", self.instrument, hdf5_path)
-
         data = load_image_and_params(hdf5_path)
+        resolved_instrument, inst_config = self._resolve_instrument_and_config(data)
+        log.info("Auto-calibrating %s with %s", resolved_instrument, hdf5_path)
+
         image    = data["image"];  mask     = data["mask"]
         sdd0     = data["sdd"];    pix      = data["pixel_size"]
         wl       = data["wavelength"]
         bcx0     = data["bcx"];    bcy0     = data["bcy"]
         tilt_x0  = data["tilt_x"]; tilt_y0  = data["tilt_y"]
 
-        calibrant_name = self._inst_config.get("calibrant", "AgBehenate")
+        calibrant_name = inst_config.get("calibrant", "AgBehenate")
         calibrant = get_calibrant(calibrant_name)
         config    = self.fit_config if self.fit_config is not None else FitConfig()
 
@@ -234,7 +238,7 @@ class Calibrator:
                 chi_square=chi1, n_peaks=r1.n_peaks_used,
                 success=False,
                 message=f"Auto Fit Stage 1 failed (chi²/dof={chi1:.4g}, need <5.0)",
-                instrument=self.instrument, hdf5_path=hdf5_path,
+                instrument=resolved_instrument, hdf5_path=hdf5_path,
             )
 
         # ── Stage 2: all d-spacings, all free parameters ────────────────────
@@ -256,7 +260,7 @@ class Calibrator:
                 chi_square=chi2, n_peaks=r2.n_peaks_used,
                 success=True,
                 message=f"Auto Fit converged at Stage 2 (chi²/dof={chi2:.4f})",
-                instrument=self.instrument, hdf5_path=hdf5_path,
+                instrument=resolved_instrument, hdf5_path=hdf5_path,
             )
 
         # ── Stage 3: refine from Stage 2 result ─────────────────────────────
@@ -284,7 +288,7 @@ class Calibrator:
                 f"Auto Fit Stage 3: chi²/dof={chi3:.4f} "
                 f"[{'OK' if success else 'FAILED — chi²≥1'}]"
             ),
-            instrument=self.instrument, hdf5_path=hdf5_path,
+            instrument=resolved_instrument, hdf5_path=hdf5_path,
         )
 
     def save_to_hdf5(self, hdf5_path: str, result: CalibrationResult) -> None:
@@ -294,7 +298,7 @@ class Calibrator:
             return
         from pynika.io.hdf5_io import save_params_to_hdf5
         save_params_to_hdf5(
-            hdf5_path, self.instrument,
+            hdf5_path, result.instrument,
             result.sdd_mm, result.bcx, result.bcy,
             result.tilt_x, result.tilt_y,
         )
@@ -313,6 +317,10 @@ class Calibrator:
         """
         from pynika.io.pv_io import write_calibration_to_pvs, write_failure_report
         pv_map = self._inst_config.get("epics", {})
+        # When instrument was auto-detected, look up PVs from the resolved name
+        if not pv_map and result is not None and result.instrument:
+            from pynika._instrument_configs import INSTRUMENT_CONFIGS
+            pv_map = INSTRUMENT_CONFIGS.get(result.instrument, {}).get("epics", {})
         if not pv_map:
             log.warning("No EPICS PV map configured for instrument '%s'", self.instrument)
             return
@@ -323,8 +331,9 @@ class Calibrator:
             return
 
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        inst_label = result.instrument if result.instrument else self.instrument
         report = (
-            f"pyNika OK: {self.instrument} calibrated {ts}  "
+            f"pyNika OK: {inst_label} calibrated {ts}  "
             f"file: {os.path.basename(result.hdf5_path)}  "
             f"SDD={result.sdd_mm:.2f} mm  BCx={result.bcx:.2f}  BCy={result.bcy:.2f}  "
             f"TiltX={result.tilt_x:.3f}  TiltY={result.tilt_y:.3f}  "
@@ -351,6 +360,8 @@ class Calibrator:
     # ------------------------------------------------------------------
 
     def _load_instrument_config(self) -> dict:
+        if self.instrument == "auto":
+            return {}  # resolved per-file in _resolve_instrument_and_config()
         if self.instrument == "Custom":
             if self.config_file is None:
                 raise ValueError("config_file must be provided for Custom instrument")
@@ -358,3 +369,18 @@ class Calibrator:
                 return json.load(fh)
         from pynika._instrument_configs import INSTRUMENT_CONFIGS
         return INSTRUMENT_CONFIGS[self.instrument]
+
+    def _resolve_instrument_and_config(self, data: dict) -> tuple[str, dict]:
+        """Return (instrument_name, inst_config) from already-loaded file data.
+
+        When self.instrument is "auto", reads the instrument tag written by
+        the data-collection system and looks up the matching configuration.
+        For explicit instruments the stored config is returned unchanged.
+        """
+        if self.instrument != "auto":
+            return self.instrument, self._inst_config
+        from pynika._instrument_configs import INSTRUMENT_CONFIGS
+        detected = data.get("instrument", "SAXS")
+        log.info("Auto-detected instrument from file: %s", detected)
+        inst_config = INSTRUMENT_CONFIGS.get(detected, INSTRUMENT_CONFIGS["SAXS"])
+        return detected, inst_config

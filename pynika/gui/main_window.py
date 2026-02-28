@@ -240,7 +240,8 @@ def launch_gui() -> None:
             self._calibrant = None
 
             # d-table widget references (populated in _populate_d_table)
-            self._d_rows: list[tuple] = []   # (use_cb, w_spin)  — one checkbox serves both Use and Show
+            self._d_rows: list[tuple] = []        # (use_cb, w_spin)
+            self._d_value_spins: list = []         # QDoubleSpinBox list, only for Custom calibrant
 
             # Overlay items in the plot (cleared on each update)
             self._ring_items: list = []
@@ -344,7 +345,12 @@ def launch_gui() -> None:
             h = QHBoxLayout(grp)
             h.addWidget(QLabel("Calibrant:"))
             self._cal_combo = QComboBox()
-            self._cal_combo.addItems(["AgBehenate", "LaB6"])
+            self._cal_combo.addItems(["AgBehenate", "LaB6", "Custom"])
+            self._cal_combo.setToolTip(
+                "AgBehenate — SAXS standard\n"
+                "LaB6 — WAXS standard\n"
+                "Custom — enter your own d-spacings directly in the table below"
+            )
             h.addWidget(self._cal_combo)
             h.addStretch()
             layout.addWidget(grp)
@@ -974,10 +980,16 @@ def launch_gui() -> None:
 
         def _on_calibrant_changed(self, name: str) -> None:
             from pynika.calibrants import get_calibrant
-            try:
-                self._calibrant = get_calibrant(name)
-            except KeyError:
-                return
+            if name == "Custom":
+                # Seed custom calibrant from LaB6 d-spacings as a sensible default
+                base = get_calibrant("LaB6")
+                base.name = "Custom"
+                self._calibrant = base
+            else:
+                try:
+                    self._calibrant = get_calibrant(name)
+                except KeyError:
+                    return
             self._populate_d_table()
             self._update_overlays()
 
@@ -985,9 +997,11 @@ def launch_gui() -> None:
             if self._calibrant is None:
                 return
             cal = self._calibrant
+            is_custom = (cal.name == "Custom")
             n = len(cal.d_spacings)
             self._d_table.setRowCount(n)
             self._d_rows.clear()
+            self._d_value_spins = []
 
             for i, (d, use, w) in enumerate(
                 zip(cal.d_spacings, cal.use_flags, cal.search_widths)
@@ -1003,10 +1017,21 @@ def launch_gui() -> None:
                 use_cb.toggled.connect(self._update_overlays)
                 self._d_table.setCellWidget(i, 0, c0)
 
-                # Col 1 — d value (read-only text item)
-                d_item = QTableWidgetItem(f"{d:.5f}")
-                d_item.setFlags(d_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self._d_table.setItem(i, 1, d_item)
+                # Col 1 — d value: editable spinbox for Custom, read-only text otherwise
+                if is_custom:
+                    d_spin = QDoubleSpinBox()
+                    d_spin.setRange(0.001, 10000.0)
+                    d_spin.setDecimals(5)
+                    d_spin.setValue(d)
+                    d_spin.setSingleStep(0.01)
+                    d_spin.setToolTip("Enter d-spacing in Ångströms")
+                    d_spin.valueChanged.connect(self._update_overlays)
+                    self._d_table.setCellWidget(i, 1, d_spin)
+                    self._d_value_spins.append(d_spin)
+                else:
+                    d_item = QTableWidgetItem(f"{d:.5f}")
+                    d_item.setFlags(d_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    self._d_table.setItem(i, 1, d_item)
 
                 # Col 2 — search width spinbox
                 w_spin = QDoubleSpinBox()
@@ -1076,7 +1101,11 @@ def launch_gui() -> None:
                 if not use_cb.isChecked():
                     continue
 
-                d = self._calibrant.d_spacings[i]
+                # For Custom calibrant read d from the editable spinboxes
+                if self._d_value_spins and i < len(self._d_value_spins):
+                    d = float(self._d_value_spins[i].value())
+                else:
+                    d = self._calibrant.d_spacings[i]
                 w = w_spin.value()
 
                 # 6.12a — red curve: full tilted-model ring
@@ -1203,8 +1232,20 @@ def launch_gui() -> None:
             layout.addWidget(grp)
 
         def _get_calibrant_from_ui(self):
-            """Return a calibrant copy with Use/Width values read from the d-table."""
-            from pynika.calibrants import get_calibrant
+            """Return a calibrant with Use/Width (and for Custom, d) values from the table."""
+            from pynika.calibrants import get_calibrant, Calibrant
+            # Custom calibrant: build entirely from the editable table values
+            if (self._calibrant is not None and self._calibrant.name == "Custom"
+                    and self._d_value_spins):
+                d_spacings    = [float(s.value()) for s in self._d_value_spins]
+                use_flags     = [use_cb.isChecked() for use_cb, _ in self._d_rows]
+                search_widths = [float(w_spin.value()) for _, w_spin in self._d_rows]
+                return Calibrant(
+                    name="Custom",
+                    d_spacings=d_spacings,
+                    use_flags=use_flags,
+                    search_widths=search_widths,
+                )
             cal = get_calibrant(self._calibrant.name)
             for i, (use_cb, w_spin) in enumerate(self._d_rows):
                 cal.use_flags[i] = use_cb.isChecked()
