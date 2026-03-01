@@ -986,9 +986,17 @@ def launch_gui() -> None:
             # our image is (ny, nx) → transpose to (nx, ny)
             self._img_item.setImage(img.T, autoLevels=reset_view)
             if reset_view:
-                # autoRange fits the view to the ImageItem with ~4% padding;
-                # setAspectLocked(True) then pads the shorter axis with grey background.
-                self._plot.autoRange(padding=0.04)
+                # Zoom to show the image with a 20-pixel border on all sides.
+                # Using the larger dimension for both axes keeps pixels square and
+                # centres the shorter axis inside the grey-padded background.
+                ny, nx = self._image.shape
+                pad = 20
+                L = max(ny, nx)
+                self._plot.getViewBox().setRange(
+                    xRange=[-pad, L + pad],
+                    yRange=[-pad, L + pad],
+                    padding=0,
+                )
 
         # ..........................................
         # Calibrant and d-spacing table (6.6 + 6.7)
