@@ -93,6 +93,34 @@ def launch_gui() -> None:
         ) from exc
 
     # -----------------------------------------------------------------------
+    # _ElideLeftLabel — compact path label that elides text from the left
+    # -----------------------------------------------------------------------
+
+    class _ElideLeftLabel(QLabel):
+        """QLabel that truncates text from the left (…path/file) when too narrow."""
+
+        def __init__(self, text: str = "", parent=None) -> None:
+            super().__init__(parent)
+            self._full_text = text
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            self._update_elided()
+
+        def setText(self, text: str) -> None:  # type: ignore[override]
+            self._full_text = text
+            self._update_elided()
+
+        def resizeEvent(self, event) -> None:
+            super().resizeEvent(event)
+            self._update_elided()
+
+        def _update_elided(self) -> None:
+            fm = self.fontMetrics()
+            elided = fm.elidedText(
+                self._full_text, Qt.TextElideMode.ElideLeft, max(self.width() - 4, 20)
+            )
+            super().setText(elided)
+
+    # -----------------------------------------------------------------------
     # FitWorker — runs optimise_geometry in a QThread (task 6.13)
     # -----------------------------------------------------------------------
 
@@ -268,17 +296,8 @@ def launch_gui() -> None:
             left_layout.setSpacing(6)
             left_layout.setContentsMargins(4, 4, 4, 4)
 
-            # 6.3 — data file selector
+            # 6.3 + 6.4 + 6.6 — file selector, calibrant combo, and log checkbox (one group)
             self._build_file_group(left_layout)
-
-            # 6.4 — log intensity checkbox (default ON)
-            self._log_cb = QCheckBox("Log intensity scale")
-            self._log_cb.setChecked(True)
-            left_layout.addWidget(self._log_cb)
-            self._log_cb.toggled.connect(lambda _: self._update_image_display(reset_view=False))
-
-            # 6.6 — calibrant selector (signal connected AFTER table is built)
-            self._build_calibrant_group(left_layout)
 
             # 6.7 — d-spacing table
             self._build_dspacing_group(left_layout)
@@ -321,29 +340,13 @@ def launch_gui() -> None:
             grp = QGroupBox("Data File")
             v = QVBoxLayout(grp)
 
-            row = QHBoxLayout()
+            # Row 1 — Select File button (left) | Calibrant combo (right)
+            row1 = QHBoxLayout()
             btn = QPushButton("Select File…")
             btn.clicked.connect(self._on_select_file)
-            row.addWidget(btn)
-            row.addStretch()
-            v.addLayout(row)
-
-            self._file_label = QLabel("No file loaded.")
-            self._file_label.setWordWrap(True)
-            self._file_label.setSizePolicy(
-                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-            )
-            v.addWidget(self._file_label)
-            layout.addWidget(grp)
-
-        # ..........................................
-        # 6.6 — Calibrant selector
-        # ..........................................
-
-        def _build_calibrant_group(self, layout: QVBoxLayout) -> None:
-            grp = QGroupBox("Calibrant")
-            h = QHBoxLayout(grp)
-            h.addWidget(QLabel("Calibrant:"))
+            row1.addWidget(btn, stretch=1)
+            row1.addSpacing(8)
+            row1.addWidget(QLabel("Calibrant:"))
             self._cal_combo = QComboBox()
             self._cal_combo.addItems(["AgBehenate", "LaB6", "Custom"])
             self._cal_combo.setToolTip(
@@ -351,8 +354,22 @@ def launch_gui() -> None:
                 "LaB6 — WAXS standard\n"
                 "Custom — enter your own d-spacings directly in the table below"
             )
-            h.addWidget(self._cal_combo)
-            h.addStretch()
+            row1.addWidget(self._cal_combo, stretch=1)
+            v.addLayout(row1)
+
+            # Row 2 — file path (elided, left) | Log intensity checkbox (right)
+            row2 = QHBoxLayout()
+            self._file_label = _ElideLeftLabel("No file loaded.")
+            self._file_label.setToolTip("No file loaded.")
+            row2.addWidget(self._file_label, stretch=1)
+            self._log_cb = QCheckBox("Log intensity")
+            self._log_cb.setChecked(True)
+            self._log_cb.toggled.connect(
+                lambda _: self._update_image_display(reset_view=False)
+            )
+            row2.addWidget(self._log_cb)
+            v.addLayout(row2)
+
             layout.addWidget(grp)
 
         # ..........................................
@@ -387,7 +404,7 @@ def launch_gui() -> None:
             self._d_table.setColumnWidth(0, 42)
             self._d_table.setColumnWidth(2, 70)
             self._d_table.verticalHeader().setVisible(False)
-            self._d_table.setFixedHeight(230)
+            self._d_table.setFixedHeight(115)
             v.addWidget(self._d_table)
             layout.addWidget(grp)
 
@@ -397,24 +414,37 @@ def launch_gui() -> None:
 
         def _build_instrument_group(self, layout: QVBoxLayout) -> None:
             grp = QGroupBox("Instrument Parameters")
-            form = QFormLayout(grp)
+            v = QVBoxLayout(grp)
 
+            # Row 1 — wavelength (left) and pixel size (right) on the same line
+            row1 = QHBoxLayout()
+            row1.addWidget(QLabel("λ (Å):"))
             self._wl_edit = QLineEdit("—")
+            self._wl_edit.setMaximumWidth(90)
             self._wl_edit.setToolTip(
                 "X-ray wavelength (Å) — loaded from HDF5 file.\n"
                 "You can edit this value to override the stored wavelength."
             )
-            form.addRow("Wavelength (Å):", self._wl_edit)
-
+            row1.addWidget(self._wl_edit)
+            row1.addSpacing(10)
+            row1.addWidget(QLabel("Pixel (mm):"))
             self._pix_edit = QLineEdit("—")
+            self._pix_edit.setMaximumWidth(80)
             self._pix_edit.setToolTip(
                 "Pixel size (mm) — loaded from HDF5 file.\n"
                 "Edit to override if the file value is incorrect."
             )
-            form.addRow("Pixel size (mm):", self._pix_edit)
+            row1.addWidget(self._pix_edit)
+            row1.addStretch()
+            v.addLayout(row1)
 
+            # Row 2 — detected instrument
+            row2 = QHBoxLayout()
+            row2.addWidget(QLabel("Instrument:"))
             self._inst_label = QLabel("—")
-            form.addRow("Detected instrument:", self._inst_label)
+            row2.addWidget(self._inst_label)
+            row2.addStretch()
+            v.addLayout(row2)
 
             layout.addWidget(grp)
 
@@ -936,10 +966,11 @@ def launch_gui() -> None:
 
             self._image = self._params["image"]
 
-            # Compact path display (last 3 components)
+            # Elided label shows the tail of the path; status bar uses last 3 parts
             parts = path.replace("\\", "/").split("/")
             short = "/".join(parts[-3:]) if len(parts) > 3 else path
-            self._file_label.setText(short)
+            self._file_label.setText(path.replace("\\", "/"))
+            self._file_label.setToolTip(path)
 
             # Instrument parameters
             self._wl_edit.setText(f"{self._params['wavelength']:.5f}")
