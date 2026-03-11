@@ -147,7 +147,6 @@ This document converts the requirements in [requirements_specification.md](requi
 ```
 pyNika OK: SAXS calibrated 2025-03-01 14:23:05
   file: /data/SAXS.hdf
-  SDD=1523.4 mm, BCx=512.3, BCy=480.1, TiltX=0.12, TiltY=-0.05
   chi2/dof=2.1
 ```
 

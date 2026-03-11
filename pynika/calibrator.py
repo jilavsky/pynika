@@ -335,8 +335,8 @@ class Calibrator:
         report = (
             f"pyNika OK: {inst_label} calibrated {ts}  "
             f"file: {os.path.basename(result.hdf5_path)}  "
-            f"SDD={result.sdd_mm:.2f} mm  BCx={result.bcx:.2f}  BCy={result.bcy:.2f}  "
-            f"TiltX={result.tilt_x:.3f}  TiltY={result.tilt_y:.3f}  "
+            #f"SDD={result.sdd_mm:.2f} mm  BCx={result.bcx:.2f}  BCy={result.bcy:.2f}  "
+            #f"TiltX={result.tilt_x:.3f}  TiltY={result.tilt_y:.3f}  "
             f"chi2={result.chi_square:.3g}"
         )
         write_calibration_to_pvs(

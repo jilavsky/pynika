@@ -569,9 +569,9 @@ def launch_gui() -> None:
                 report_msg = (
                     f"pyNika OK: {inst} calibrated {ts}\n"
                     f"  file: {path}\n"
-                    f"  SDD={p['sdd']:.3f} mm, BCx={p['bcx']:.3f}, "
-                    f"BCy={p['bcy']:.3f}, TiltX={p['tilt_x']:.4f}, "
-                    f"TiltY={p['tilt_y']:.4f}\n"
+                    #f"  SDD={p['sdd']:.3f} mm, BCx={p['bcx']:.3f}, "
+                    #f"BCy={p['bcy']:.3f}, TiltX={p['tilt_x']:.4f}, "
+                   # f"TiltY={p['tilt_y']:.4f}\n"
                     f"  {chi2_text}"
                 )
                 save_params_to_hdf5(
