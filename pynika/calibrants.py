@@ -30,7 +30,7 @@ class Calibrant:
         if len(self.use_flags) != n:
             self.use_flags = [True] * n
         if len(self.search_widths) != n:
-            self.search_widths = [30.0] * n
+            self.search_widths = [50.0] * n
 
 
 # ---------------------------------------------------------------------------
@@ -77,8 +77,8 @@ LAB6 = Calibrant(
     ],
     use_flags=[True] * 10,
     # Search widths (±pixels around theoretical radius):
-    # first 3 rings → 25 px; remainder → 30 px.
-    search_widths=[25, 25, 25, 30, 30, 30, 30, 30, 30, 30],
+    # first 3 rings → 50 px; peaks 4+ → 60 px.
+    search_widths=[50, 50, 50, 60, 60, 60, 60, 60, 60, 60],
 )
 
 # ---------------------------------------------------------------------------

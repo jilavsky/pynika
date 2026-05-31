@@ -385,7 +385,7 @@ def launch_gui() -> None:
             row.addWidget(QLabel("Set ±W all (px):"))
             self._width_all_spin = QDoubleSpinBox()
             self._width_all_spin.setRange(1, 500)
-            self._width_all_spin.setValue(15.0)
+            self._width_all_spin.setValue(50.0)
             self._width_all_spin.setSingleStep(5.0)
             self._width_all_spin.setDecimals(0)
             row.addWidget(self._width_all_spin)
