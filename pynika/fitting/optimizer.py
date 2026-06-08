@@ -135,7 +135,7 @@ def fit_gaussian_linear(
             warnings.simplefilter("ignore")
             popt, _ = curve_fit(
                 _gauss_linear, xv, yv,
-                p0=p0, bounds=(lb, ub), maxfev=2000,
+                p0=p0, bounds=(lb, ub), maxfev=200,
             )
         A, mu, sigma, m, b = popt
         residuals = yv - _gauss_linear(xv, *popt)
@@ -177,7 +177,7 @@ def find_ring_peaks(
     Returns converged PeakFit objects (one per azimuthal direction where a
     peak was found within the search window).
     """
-    from pynika.geometry import expected_ring_radius, radial_profile_at_angle
+    from pynika.geometry import build_rotation_matrix, radial_profile_at_angle, d_to_pixel_radius
 
     sin_arg = wavelength / (2.0 * d_spacing)
     if abs(sin_arg) >= 1.0:
@@ -186,19 +186,76 @@ def find_ring_peaks(
     theta_bragg = float(np.arcsin(sin_arg))
 
     ny, nx = image.shape
-    peaks: list[PeakFit] = []
-    angles_deg = np.arange(0.0, 360.0, config.step_deg)
 
-    for angle_deg in angles_deg:
-        angle_rad = float(np.deg2rad(angle_deg))
+    # Ring-level early exit: if the ring circle (plus search window) cannot
+    # geometrically intersect the detector rectangle, skip all 360 angles.
+    r_est = d_to_pixel_radius(d_spacing, wavelength, sdd_mm, pixel_size_mm)
+    r_reach = r_est + search_width
+    if (bcy - r_reach >= ny or bcy + r_reach < 0 or
+            bcx - r_reach >= nx or bcx + r_reach < 0):
+        log.debug("d=%.4f A: ring circle outside detector bbox — skipping all angles", d_spacing)
+        return []
 
-        # Expected ring radius at this azimuthal angle
-        r_center = expected_ring_radius(
-            theta_bragg, angle_rad, bcx, bcy, sdd_mm, pixel_size_mm,
-            tilt_x_deg, tilt_y_deg,
+    # ------------------------------------------------------------------
+    # Vectorised geometry pass: build rotation matrix once per ring, then
+    # compute expected radial distances for all azimuthal angles in one
+    # numpy batch.  Pre-filter to angles whose search strip lies fully
+    # within the detector before running any Gaussian fitting.
+    # ------------------------------------------------------------------
+    rho = build_rotation_matrix(tilt_x_deg, tilt_y_deg)
+    sdd_px = sdd_mm / pixel_size_mm
+    two_theta = 2.0 * theta_bragg
+
+    angles_deg_arr = np.arange(0.0, 360.0, config.step_deg)
+    angles_rad_arr = np.deg2rad(angles_deg_arr)
+    cos_a = np.cos(angles_rad_arr)
+    sin_a = np.sin(angles_rad_arr)
+
+    # Rotate all unit direction vectors at once: shape (3, N)
+    vecs = np.vstack([cos_a, sin_a, np.zeros(len(angles_rad_arr))])
+    xyz = rho @ vecs
+    norms = np.linalg.norm(xyz, axis=0)
+    ok = norms > 1e-10
+    xyz_n = np.where(ok, xyz / np.where(ok, norms, 1.0), 0.0)
+
+    gamma = np.pi - np.arccos(np.clip(xyz_n[2], -1.0, 1.0))
+    other_angle = np.pi - two_theta - gamma
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        dist = np.where(
+            np.abs(other_angle) > 1e-10,
+            sdd_px * np.sin(two_theta) / np.sin(other_angle),
+            np.nan,
         )
-        if not np.isfinite(r_center) or r_center <= 0:
-            continue
+
+    # Vectorised 4-corner bounds check — mirrors radial_profile_at_angle logic
+    # exactly so that the inner call will always return within=True.
+    tw = config.transverse_px
+    r_inner = np.maximum(1.0, dist - search_width)
+    r_outer = dist + search_width
+    # perpendicular direction: cos_p = -sin_a, sin_p = cos_a
+    neg_sin_a = -sin_a
+
+    def _in(xi, yi):
+        return (xi >= 0) & (xi < nx) & (yi >= 0) & (yi < ny)
+
+    in_det = (
+        np.isfinite(dist) & (dist > 0) &
+        _in(bcx + r_inner * cos_a + tw * neg_sin_a, bcy + r_inner * sin_a + tw * cos_a) &
+        _in(bcx + r_inner * cos_a - tw * neg_sin_a, bcy + r_inner * sin_a - tw * cos_a) &
+        _in(bcx + r_outer * cos_a + tw * neg_sin_a, bcy + r_outer * sin_a + tw * cos_a) &
+        _in(bcx + r_outer * cos_a - tw * neg_sin_a, bcy + r_outer * sin_a - tw * cos_a)
+    )
+
+    valid_indices = np.where(in_det)[0]
+    log.debug("d=%.4f A: %d/%d angles pass bounds pre-filter",
+              d_spacing, len(valid_indices), len(angles_deg_arr))
+
+    peaks: list[PeakFit] = []
+    for idx in valid_indices:
+        angle_rad = float(angles_rad_arr[idx])
+        angle_deg = float(angles_deg_arr[idx])
+        r_center = float(dist[idx])
 
         # Extract radial profile
         radii, intensities, within = radial_profile_at_angle(
@@ -213,6 +270,17 @@ def find_ring_peaks(
         if nan_frac > config.masked_fraction_limit:
             continue
 
+        # Quick pre-filter: reject profiles with no obvious peak before the
+        # expensive curve_fit.  Uses the same amplitude threshold as the
+        # post-fit check so no real peaks are lost.
+        valid_int = intensities[np.isfinite(intensities)]
+        if len(valid_int) < 5:
+            continue
+        noise = float(np.std(valid_int))
+        peak_est = float(np.max(valid_int)) - float(np.percentile(valid_int, 20))
+        if peak_est < config.min_amplitude_sigma * noise:
+            continue
+
         # Fit Gaussian + linear background
         fit = fit_gaussian_linear(radii, intensities)
         if fit is None:
@@ -222,9 +290,7 @@ def find_ring_peaks(
         if not (r_center - search_width <= fit["center"] <= r_center + search_width):
             continue
 
-        # Peak amplitude must exceed local noise
-        valid_int = intensities[np.isfinite(intensities)]
-        noise = float(np.std(valid_int)) if len(valid_int) >= 3 else 1.0
+        # Peak amplitude must exceed local noise (re-use already-computed noise)
         if fit["amplitude"] < config.min_amplitude_sigma * noise:
             continue
 
@@ -239,7 +305,7 @@ def find_ring_peaks(
         ))
 
     log.debug("d=%.4f A: %d peaks found out of %d directions",
-              d_spacing, len(peaks), len(angles_deg))
+              d_spacing, len(peaks), len(angles_deg_arr))
     return peaks
 
 
